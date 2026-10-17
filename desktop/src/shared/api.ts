@@ -83,12 +83,17 @@ export interface DesktopApi {
   auth: {
     /** Restores the saved session, if any. */
     session(): Promise<Session | null>
-    defaultServer(): Promise<string>
-    login(server: string, username: string, password: string): Promise<Result<Session>>
+    /** Logs into the server configured in settings. */
+    login(username: string, password: string): Promise<Result<Session>>
     logout(): Promise<void>
     changePassword(current: string, next: string): Promise<Result<null>>
     /** Called when the session can no longer be refreshed. Returns an unsubscribe function. */
     onExpired(callback: () => void): () => void
+  }
+  settings: {
+    server(): Promise<string>
+    /** Validates and saves the server URL; changing it ends the current session. */
+    setServer(url: string): Promise<Result<string>>
   }
   /** Authenticated call to the backend. Paths start with /api/ (auth endpoints excluded). */
   request<T>(method: HttpMethod, path: string, body?: unknown): Promise<Result<T>>

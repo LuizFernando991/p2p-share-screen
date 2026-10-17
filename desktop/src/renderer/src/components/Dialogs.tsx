@@ -1,4 +1,5 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { Hash, Timer, X } from 'lucide-react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 
 import type { Room, RoomType } from '../../../shared/api'
 import { api, errorMessage, messageFor } from '../lib/api'
@@ -10,7 +11,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
         <header className="modal-header">
           <h2>{title}</h2>
           <button className="icon" onClick={onClose} aria-label="Fechar">
-            ✕
+            <X size={18} />
           </button>
         </header>
         {children}
@@ -46,12 +47,16 @@ export function CreateRoomDialog({ onClose, onCreated }: { onClose: () => void; 
         <div className="choice-group">
           <label className={`choice ${type === 'restricted' ? 'selected' : ''}`}>
             <input type="radio" checked={type === 'restricted'} onChange={() => setType('restricted')} />
-            <strong># Fixa</strong>
+            <strong className="choice-title">
+              <Hash size={15} /> Fixa
+            </strong>
             <span className="muted small">Permanente. Você escolhe quem são os membros.</span>
           </label>
           <label className={`choice ${type === 'private' ? 'selected' : ''}`}>
             <input type="radio" checked={type === 'private'} onChange={() => setType('private')} />
-            <strong>⏱ Temporária</strong>
+            <strong className="choice-title">
+              <Timer size={15} /> Temporária
+            </strong>
             <span className="muted small">Entra quem tiver o código. Some quando fica vazia.</span>
           </label>
         </div>
@@ -103,7 +108,45 @@ export function JoinCodeDialog({ onClose, onJoined }: { onClose: () => void; onJ
   )
 }
 
-export function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
+/** Login-screen settings: the server address (rarely changed, so kept out of the form). */
+export function ServerDialog({ onClose }: { onClose: () => void }) {
+  const [server, setServer] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    void window.api.settings.server().then(setServer)
+  }, [])
+
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    const res = await window.api.settings.setServer(server)
+    if (res.ok) onClose()
+    else setError(messageFor(res.error.code, res.error.message))
+  }
+
+  return (
+    <Modal title="Configurações" onClose={onClose}>
+      <form onSubmit={submit} className="stack">
+        <label>
+          Servidor
+          <input
+            value={server}
+            onChange={(e) => setServer(e.target.value)}
+            placeholder="https://share.exemplo.com"
+            required
+            autoFocus
+          />
+        </label>
+        <p className="muted small">Endereço do servidor da sua equipe. Só mude se o administrador pedir.</p>
+        {error && <p className="error">{error}</p>}
+        <button className="primary">Salvar</button>
+      </form>
+    </Modal>
+  )
+}
+
+/** In-app settings: account (password) and the connected server. */
+export function SettingsDialog({ server, onClose }: { server: string; onClose: () => void }) {
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [error, setError] = useState('')
@@ -111,34 +154,40 @@ export function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
 
   async function submit(e: FormEvent) {
     e.preventDefault()
+    setError('')
     const res = await window.api.auth.changePassword(current, next)
-    if (res.ok) setDone(true)
-    else setError(messageFor(res.error.code, res.error.message))
+    if (res.ok) {
+      setDone(true)
+      setCurrent('')
+      setNext('')
+    } else setError(messageFor(res.error.code, res.error.message))
   }
 
   return (
-    <Modal title="Trocar senha" onClose={onClose}>
-      {done ? (
-        <div className="stack">
-          <p>Senha alterada. As outras sessões da sua conta foram encerradas.</p>
-          <button className="primary" onClick={onClose}>
-            OK
-          </button>
-        </div>
-      ) : (
-        <form onSubmit={submit} className="stack">
-          <label>
-            Senha atual
-            <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} required autoFocus />
-          </label>
-          <label>
-            Nova senha
-            <input type="password" value={next} onChange={(e) => setNext(e.target.value)} minLength={8} required />
-          </label>
-          {error && <p className="error">{error}</p>}
-          <button className="primary">Salvar</button>
-        </form>
-      )}
+    <Modal title="Configurações" onClose={onClose}>
+      <div className="stack">
+        <section className="settings-section">
+          <h3>Conta</h3>
+          <form onSubmit={submit} className="stack">
+            <label>
+              Senha atual
+              <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
+            </label>
+            <label>
+              Nova senha
+              <input type="password" value={next} onChange={(e) => setNext(e.target.value)} minLength={8} required />
+            </label>
+            {error && <p className="error">{error}</p>}
+            {done && <p className="success">Senha alterada. As outras sessões da sua conta foram encerradas.</p>}
+            <button className="primary">Trocar senha</button>
+          </form>
+        </section>
+        <section className="settings-section">
+          <h3>Servidor</h3>
+          <code className="server-url">{server}</code>
+          <p className="muted small">Para usar outro servidor, saia da conta e mude em Configurações na tela de login.</p>
+        </section>
+      </div>
     </Modal>
   )
 }

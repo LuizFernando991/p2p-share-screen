@@ -1,12 +1,13 @@
+import { Hash, KeyRound, LogOut, Plus, Settings, ShieldCheck, Timer } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
 import type { Room, Session } from '../../../shared/api'
-import { ChangePasswordDialog, CreateRoomDialog, JoinCodeDialog } from '../components/Dialogs'
+import { CreateRoomDialog, JoinCodeDialog, SettingsDialog } from '../components/Dialogs'
 import { api, errorMessage } from '../lib/api'
 import { AdminPage } from './AdminPage'
 import { RoomPage } from './RoomPage'
 
-type Dialog = 'create' | 'join' | 'password' | null
+type Dialog = 'create' | 'join' | 'settings' | null
 
 export function Shell({ session, onLogout }: { session: Session; onLogout: () => void }) {
   const me = session.user
@@ -45,10 +46,10 @@ export function Shell({ session, onLogout }: { session: Session; onLogout: () =>
           <span>Salas</span>
           <div className="row">
             <button className="icon" title="Entrar com código" onClick={() => setDialog('join')}>
-              🔑
+              <KeyRound size={16} />
             </button>
             <button className="icon" title="Criar sala" onClick={() => setDialog('create')}>
-              ＋
+              <Plus size={18} />
             </button>
           </div>
         </header>
@@ -61,7 +62,7 @@ export function Shell({ session, onLogout }: { session: Session; onLogout: () =>
               className={`room-item ${view === 'rooms' && r.id === selected ? 'active' : ''}`}
               onClick={() => open(r.id)}
             >
-              <span className="room-icon">{r.temporary ? '⏱' : '#'}</span>
+              <span className="room-icon">{r.temporary ? <Timer size={15} /> : <Hash size={15} />}</span>
               <span className="room-name">{r.name}</span>
               {r.live && r.live.publishers > 0 && (
                 <span className="live-badge" title={`${r.live.participants} na sala`}>
@@ -83,16 +84,17 @@ export function Shell({ session, onLogout }: { session: Session; onLogout: () =>
             <button
               className={`icon ${view === 'admin' ? 'active' : ''}`}
               title="Usuários (admin)"
+              aria-label="Usuários (admin)"
               onClick={() => setView(view === 'admin' ? 'rooms' : 'admin')}
             >
-              👥
+              <ShieldCheck size={16} />
             </button>
           )}
-          <button className="icon" title="Trocar senha" onClick={() => setDialog('password')}>
-            ⚙
+          <button className="icon" title="Configurações" onClick={() => setDialog('settings')}>
+            <Settings size={16} />
           </button>
           <button className="icon" title="Sair" onClick={onLogout}>
-            ⏻
+            <LogOut size={16} />
           </button>
         </footer>
       </aside>
@@ -137,7 +139,7 @@ export function Shell({ session, onLogout }: { session: Session; onLogout: () =>
           }}
         />
       )}
-      {dialog === 'password' && <ChangePasswordDialog onClose={() => setDialog(null)} />}
+      {dialog === 'settings' && <SettingsDialog server={session.server} onClose={() => setDialog(null)} />}
     </div>
   )
 }

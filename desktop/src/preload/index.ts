@@ -6,8 +6,7 @@ const api: DesktopApi = {
   platform: process.platform,
   auth: {
     session: () => ipcRenderer.invoke('auth:session'),
-    defaultServer: () => ipcRenderer.invoke('auth:default-server'),
-    login: (server, username, password) => ipcRenderer.invoke('auth:login', server, username, password),
+    login: (username, password) => ipcRenderer.invoke('auth:login', username, password),
     logout: () => ipcRenderer.invoke('auth:logout'),
     changePassword: (current, next) => ipcRenderer.invoke('auth:change-password', current, next),
     onExpired: (callback) => {
@@ -15,6 +14,10 @@ const api: DesktopApi = {
       ipcRenderer.on('auth:expired', listener)
       return () => ipcRenderer.removeListener('auth:expired', listener)
     }
+  },
+  settings: {
+    server: () => ipcRenderer.invoke('settings:server'),
+    setServer: (url) => ipcRenderer.invoke('settings:set-server', url)
   },
   request: (method, path, body) => ipcRenderer.invoke('api:request', method, path, body),
   screen: {

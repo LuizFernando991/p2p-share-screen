@@ -7,6 +7,7 @@ import {
   type TrackReference
 } from '@livekit/components-react'
 import { AudioPresets, RoomEvent, ScreenSharePresets, Track, type LocalTrackPublication } from 'livekit-client'
+import { Maximize2, MonitorOff, MonitorUp, PhoneOff } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { SYSTEM_AUDIO_DEVICE_LABEL } from '../../../shared/api'
@@ -191,17 +192,17 @@ export function Stage({ canPublish }: { canPublish: boolean }) {
             </label>
             {isScreenShareEnabled ? (
               <button className="danger" disabled={busy} onClick={stop}>
-                Parar de compartilhar
+                <MonitorOff size={16} /> Parar de compartilhar
               </button>
             ) : (
               <button className="primary" disabled={busy} onClick={() => (isLinux ? start(null) : setPicking(true))}>
-                Compartilhar tela
+                <MonitorUp size={16} /> {busy ? 'Iniciando…' : 'Compartilhar tela'}
               </button>
             )}
           </>
         )}
-        <button className="ghost" onClick={() => room.disconnect()}>
-          Desconectar
+        <button className="ghost danger" onClick={() => room.disconnect()}>
+          <PhoneOff size={16} /> Desconectar
         </button>
       </div>
 
@@ -238,7 +239,7 @@ function ScreenTile({
           onFullscreen(ref.current)
         }}
       >
-        ⛶
+        <Maximize2 size={14} />
       </button>
     </div>
   )

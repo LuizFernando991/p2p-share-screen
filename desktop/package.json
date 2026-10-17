@@ -16,6 +16,7 @@
   "dependencies": {
     "@livekit/components-react": "2.9.24",
     "livekit-client": "2.22.3",
+    "lucide-react": "1.51.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

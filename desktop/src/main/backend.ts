@@ -30,8 +30,27 @@ export class Backend {
 
   constructor(
     private readonly settings: Settings,
+    private readonly defaultServer: string,
     private readonly onExpired: () => void
   ) {}
+
+  get configuredServer(): string {
+    return this.settings.server ?? this.defaultServer
+  }
+
+  /** Saves a new server URL. A different server invalidates the session. */
+  setServer(input: string): Result<string> {
+    const base = normalizeServer(input)
+    if (!base) {
+      return { ok: false, error: { status: 0, code: 'invalid_server', message: 'invalid server URL' } }
+    }
+    if (base !== this.configuredServer) {
+      this.clear()
+      this.server = ''
+    }
+    this.settings.server = base
+    return { ok: true, data: base }
+  }
 
   async restore(): Promise<Session | null> {
     this.server = this.settings.server ?? ''
@@ -40,15 +59,11 @@ export class Backend {
     return me.ok ? { user: me.data, server: this.server } : null
   }
 
-  async login(server: string, username: string, password: string): Promise<Result<Session>> {
-    const base = normalizeServer(server)
-    if (!base) {
-      return { ok: false, error: { status: 0, code: 'invalid_server', message: 'invalid server URL' } }
-    }
+  async login(username: string, password: string): Promise<Result<Session>> {
+    const base = this.configuredServer
     const res = await send<LoginResponse>('POST', `${base}/api/auth/login`, { username, password })
     if (!res.ok) return res
     this.server = base
-    this.settings.server = base
     this.setTokens(res.data)
     return { ok: true, data: { user: res.data.user, server: base } }
   }

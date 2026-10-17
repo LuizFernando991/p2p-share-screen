@@ -24,7 +24,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     title: 'ShareScreen',
-    backgroundColor: '#1e1f22',
+    backgroundColor: '#24273a',
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -42,12 +42,13 @@ function createWindow(): void {
   else void win.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
-function registerIpc(backend: Backend, settings: Settings): void {
+function registerIpc(backend: Backend): void {
   ipcMain.handle('auth:session', () => backend.restore())
-  ipcMain.handle('auth:default-server', () => settings.server ?? DEFAULT_SERVER)
-  ipcMain.handle('auth:login', (_e, server: string, username: string, password: string) =>
-    backend.login(String(server), String(username), String(password))
+  ipcMain.handle('auth:login', (_e, username: string, password: string) =>
+    backend.login(String(username), String(password))
   )
+  ipcMain.handle('settings:server', () => backend.configuredServer)
+  ipcMain.handle('settings:set-server', (_e, url: string) => backend.setServer(String(url)))
   ipcMain.handle('auth:logout', () => backend.logout())
   ipcMain.handle('auth:change-password', (_e, current: string, next: string) =>
     backend.changePassword(String(current), String(next))
@@ -68,10 +69,10 @@ function registerIpc(backend: Backend, settings: Settings): void {
 
 app.whenReady().then(() => {
   const settings = new Settings()
-  const backend = new Backend(settings, () => {
+  const backend = new Backend(settings, DEFAULT_SERVER, () => {
     for (const win of BrowserWindow.getAllWindows()) win.webContents.send('auth:expired')
   })
-  registerIpc(backend, settings)
+  registerIpc(backend)
 
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
     callback(ALLOWED_PERMISSIONS.includes(permission))

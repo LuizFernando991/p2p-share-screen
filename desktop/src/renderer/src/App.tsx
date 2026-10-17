@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import type { Session } from '../../shared/api'
+import { ToastProvider } from './components/ui'
 import { Login } from './pages/Login'
 import { Shell } from './pages/Shell'
 
@@ -21,12 +22,14 @@ export function App() {
     return <Login expired={state.expired} onLogin={(session) => setState({ status: 'ready', session })} />
   }
   return (
-    <Shell
-      session={state.session}
-      onLogout={async () => {
-        await window.api.auth.logout()
-        setState({ status: 'anonymous' })
-      }}
-    />
+    <ToastProvider>
+      <Shell
+        session={state.session}
+        onLogout={async () => {
+          await window.api.auth.logout()
+          setState({ status: 'anonymous' })
+        }}
+      />
+    </ToastProvider>
   )
 }
