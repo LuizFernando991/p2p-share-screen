@@ -170,18 +170,28 @@ docker run --rm --network host livekit/livekit-cli room join --url ws://127.0.0.
   --api-key devkey --api-secret dev-secret-change-me-dev-secret-change-me --identity tester <room-id>
 ```
 
-## Desktop (fase 2) e riscos conhecidos
+## Desktop e riscos conhecidos
 
 - Tauri v2 + React + TS. A UI (login, salas, membros, admin) é React; **a captura e a publicação da tela são nativas em Rust**.
 - **Captura de tela (decidido): nativa no lado Rust do Tauri, não por `getDisplayMedia` do WebView.** O objetivo é capturar o monitor inteiro ou qualquer janela do SO de forma confiável nos dois sistemas. No Linux, o WebView do Tauri (WebKitGTK) não suporta isso bem.
-  - Windows: Windows Graphics Capture API.
-  - Linux: Wayland via `xdg-desktop-portal` + PipeWire (o SO mostra o seletor de tela/janela); X11 via XShm/XComposite.
-  - Candidatos de crate: `scap` (multiplataforma, WGC + PipeWire), `xcap`. Escolher no spike.
-  - Publicação: SDK Rust do LiveKit (`livekit` crate). Os frames capturados entram num `NativeVideoSource`, e a codificação (VP8/H.264, simulcast) fica com o libwebrtc do SDK.
-  - Áudio do sistema: Windows via WASAPI loopback; Linux via monitor do PipeWire/PulseAudio.
+  - **Capturador (decidido pelo spike):** o `DesktopCapturer` do próprio libwebrtc do LiveKit (`livekit::webrtc::desktop_capturer`), o mesmo do Chromium. Uma API para os dois sistemas: no Linux, `DesktopCaptureSourceType::Generic` abre o seletor do xdg-desktop-portal (PipeWire) no Wayland; no Windows, `Screen`/`Window` com `get_source_list()`. Sem crates extras de captura.
+  - Os frames (BGRA, que a libyuv chama de "ARGB") viram I420 com `yuv_helper::argb_to_i420` e entram num `NativeVideoSource(is_screencast=true)`, publicado com `TrackSource::Screenshare`, VP8 e simulcast.
+  - Áudio do sistema (ainda não feito): o capturador do Chromium é só vídeo. Windows via WASAPI loopback; Linux via monitor do PipeWire/PulseAudio; publicar por `NativeAudioSource` com `TrackSource::ScreenshareAudio`.
   - A UI controla a captura por comandos Tauri (`list_sources`, `start_share`, `stop_share`) e recebe o estado por eventos.
-- **Assistir (a validar no spike):** a primeira opção é `livekit-client` no WebView. O suporte a WebRTC do WebKitGTK também é limitado, então, se falhar no Linux, assinar a faixa pelo SDK Rust e entregar os frames para a UI renderizar.
-- **Spike antes da UI (fase 4):** capturar, publicar e assistir uma tela via LiveKit no Windows, no Linux/Wayland e no Linux/X11.
+- **Assistir (a validar):** a primeira opção é `livekit-client` no WebView (o WebKitGTK precisa de `enable-webrtc` ligado e dos plugins GStreamer `bad`/`nice`). Se falhar no Linux, assinar pelo SDK Rust (`NativeVideoStream`) e entregar os frames para a UI.
+
+### Spike (fase 4): `desktop/spike/`
+Binário com `share` (captura + publica) e `watch` (assina + salva PNG). Os dois fazem login no backend e pegam o token em `join-token`. Configuração por env: `SPIKE_API`, `SPIKE_USER`, `SPIKE_PASSWORD`, `SPIKE_ROOM`, `SPIKE_OUT`, `SPIKE_SOURCE`.
+- ✅ Linux/Wayland (Pop!_OS 24.04, COSMIC): o seletor do portal abriu, a captura saiu em 1920x1080 a 30 fps, e o `watch` recebeu o frame pelo LiveKit com a tela correta. A listagem mostrou `live {participants: 2, publishers: 1}`.
+- ⏳ Windows: não testado (precisa de uma máquina Windows). ⏳ Linux/X11: não testado. ⏳ Áudio: não feito. ⏳ Assistir no WebView: não testado.
+
+### Requisitos de build (só para quem compila: dev e CI; o usuário final não precisa de nada disso)
+- **clang ≥ 21**: o libwebrtc do `webrtc-sys` vem compilado com a libc++ do Chromium e o build recusa um clang mais antigo. No Ubuntu 24.04, instalar pelo apt.llvm.org (`sudo ./llvm.sh 21`). `desktop/spike/.cargo/config.toml` aponta `CC`/`CXX` para o `clang-21`.
+- No Ubuntu 24.04, o clang escolhe o GCC 14 para os headers do libstdc++, mas eles só existem para o 13; o config passa `--gcc-install-dir=.../13`. Não é preciso se `libstdc++-14-dev` estiver instalado.
+- O webrtc-sys só usa os **headers** do GLib/GIO; o app precisa ligar `gio-2.0`, `gobject-2.0` e `glib-2.0` (no spike, via `build.rs`; no Tauri, o GTK já liga).
+- A captura no Wayland usa D-Bus assíncrono do GLib: sem um main loop do GLib rodando, o seletor nunca abre. No spike, usar a feature `glib-main-loop` do `livekit`. No Tauri, o loop do GTK já roda; verificar se a feature fica desnecessária ou atrapalha.
+- Pacotes Debian/Ubuntu: `build-essential pkg-config clang libclang-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libpipewire-0.3-dev libspa-0.2-dev libpulse-dev libx11-dev libxext-dev libxfixes-dev libxrandr-dev libxcomposite-dev libxdamage-dev libgl1-mesa-dev libgbm-dev libdrm-dev libva-dev`.
+- Para o usuário final, o libwebrtc vai **estático** dentro do binário. Em runtime: no Linux, WebKitGTK, GLib, PipeWire e xdg-desktop-portal (presentes em qualquer desktop moderno; o `.deb` declara as dependências, o AppImage embute); no Windows, o WebView2 (já vem no Windows 10/11).
 
 ## Ordem de implementação
 
@@ -189,7 +199,7 @@ docker run --rm --network host livekit/livekit-cli room join --url ws://127.0.0.
 2. ✅ Salas, membros, código de convite, transferência de posse, limpeza de salas temporárias, testes.
 3. ✅ Integração LiveKit: join-token, webhook, `live` na listagem, derrubar conexões, limpeza verificada no LiveKit, docker-compose de dev.
    - Pendente (quando o domínio estiver configurado): compose de produção na VPS (backend + LiveKit com TURN/TLS + proxy reverso com HTTPS, ex.: Caddy).
-4. Spike de captura de tela no Tauri (Windows e Linux).
+4. 🔶 Spike de captura: ✅ vídeo no Linux/Wayland; pendentes: áudio do sistema, Windows, X11, assistir no WebView.
 5. App desktop.
 
 ## Decisões de produto
