@@ -12,3 +12,6 @@ backend/data/
 node_modules/
 dist/
 target/
+out/
+release/
+e2e-out/

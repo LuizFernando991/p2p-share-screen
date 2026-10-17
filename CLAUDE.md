@@ -6,7 +6,7 @@ App desktop (Windows e Linux) de compartilhamento de tela em salas, com acesso c
 
 ```
 ┌──────────────────────┐   HTTPS (REST)    ┌──────────────────────┐
-│ desktop/ (Tauri v2)  │ ────────────────► │ backend/ (Go)        │
+│ desktop/ (Electron)  │ ────────────────► │ backend/ (Go)        │
 │ React + TypeScript   │   login, salas,   │ auth, usuários,      │
 │                      │   token LiveKit   │ salas, permissões    │
 │                      │                   │ SQLite               │
@@ -40,7 +40,7 @@ backend/            # Go: API REST
     id/             # geração de UUIDv7
     testutil/       # helpers de teste (banco temporário)
   migrations/       # migrations SQL (goose), embutidas no binário
-desktop/            # Tauri v2 + React + TS (vem depois do backend)
+desktop/            # Electron + React + TS (main / preload / renderer)
 deploy/             # docker-compose.yml + livekit.dev.yaml (LiveKit local de dev); produção: pendente
 ```
 
@@ -170,37 +170,56 @@ docker run --rm --network host livekit/livekit-cli room join --url ws://127.0.0.
   --api-key devkey --api-secret dev-secret-change-me-dev-secret-change-me --identity tester <room-id>
 ```
 
-## Desktop e riscos conhecidos
+## Desktop (Electron)
 
-- Tauri v2 + React + TS. A UI (login, salas, membros, admin) é React; **a captura e a publicação da tela são nativas em Rust**.
-- **Captura de tela (decidido): nativa no lado Rust do Tauri, não por `getDisplayMedia` do WebView.** O objetivo é capturar o monitor inteiro ou qualquer janela do SO de forma confiável nos dois sistemas. No Linux, o WebView do Tauri (WebKitGTK) não suporta isso bem.
-  - **Capturador (decidido pelo spike):** o `DesktopCapturer` do próprio libwebrtc do LiveKit (`livekit::webrtc::desktop_capturer`), o mesmo do Chromium. Uma API para os dois sistemas: no Linux, `DesktopCaptureSourceType::Generic` abre o seletor do xdg-desktop-portal (PipeWire) no Wayland; no Windows, `Screen`/`Window` com `get_source_list()`. Sem crates extras de captura.
-  - Os frames (BGRA, que a libyuv chama de "ARGB") viram I420 com `yuv_helper::argb_to_i420` e entram num `NativeVideoSource(is_screencast=true)`, publicado com `TrackSource::Screenshare`, VP8 e simulcast.
-  - **Áudio do sistema:** o capturador do Chromium só cuida de vídeo. No Linux (feito no spike): gravar de `@DEFAULT_MONITOR@` pela API simples do PulseAudio (`libpulse-simple-binding`; o pipewire-pulse atende), 48 kHz estéreo, em frames de 10 ms, num `NativeAudioSource` com AEC/NS/AGC **desligados**, publicado como `TrackSource::ScreenshareAudio` com `dtx: false`. No Windows: WASAPI loopback (ainda não escrito).
-  - Cuidado: o monitor captura **tudo** o que toca no computador, inclusive o áudio de outra sala que a pessoa esteja assistindo no próprio app (vira eco para quem assiste). Resolver no app: não tocar o áudio recebido enquanto a pessoa transmite, ou excluir o stream do próprio app da captura.
-  - A UI controla a captura por comandos Tauri (`list_sources`, `start_share`, `stop_share`) e recebe o estado por eventos.
-- **Assistir: `livekit-client` no WebView NÃO funciona no Linux.** O WebKitGTK do Ubuntu 24.04 (2.52) é compilado sem o backend GStreamer WebRTC: o `RTCPeerConnection` fica `undefined` mesmo com `enable-webrtc` ligado. No Windows, o WebView2 (Chromium) tem WebRTC. A forma de assistir no Linux está em decisão (ver o fim do spike).
+**Decisão:** Electron + React + TypeScript + `livekit-client`, o mesmo modelo do Discord: Chromium com WebRTC completo, então capturar, publicar, assistir, qualidade adaptativa e simulcast vêm do `livekit-client`. Começamos com Tauri, mas o WebKitGTK do Ubuntu não tem WebRTC (ver "Histórico do spike").
 
-### Spike (fase 4): `desktop/spike/`
-Subcomandos:
-- `share`: captura tela e áudio e publica;
-- `watch`: assina, salva um frame em PNG e mede o áudio;
-- `view`: o mesmo que `watch`, mas dentro de um WebView `wry` com `livekit-client` 2.22.3;
-- `tone`: gera um WAV de 440 Hz.
+- **Stack:** `electron-vite` 5 (com Vite 7.3; o electron-vite 5 não aceita Vite 8), React 19, TypeScript 6, `livekit-client`, empacotamento com `electron-builder` (deb, AppImage, NSIS). Gerenciador: npm.
+- **Processos:**
+  - **main** (Node): janela, toda a comunicação com o backend, credenciais, captura de tela (handler de display media), áudio do sistema no Linux (venmic).
+  - **preload**: expõe uma API mínima e tipada via `contextBridge` (`window.api`).
+  - **renderer** (React): UI e mídia (`livekit-client`). `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`, CSP restritiva.
+- **Backend só pelo main:** o renderer chama `window.api.*` via IPC, e o main faz o fetch. Assim não há CORS no backend, e **o renderer nunca vê access nem refresh token**. O main serializa os refresh (o backend trata dois refresh simultâneos do mesmo token como roubo). O refresh token fica salvo criptografado com `safeStorage` (keyring do sistema) em `userData`. A URL do servidor é configurável na tela de login.
+- **Token LiveKit:** o renderer pede `join-token` via IPC e conecta direto no LiveKit pelo WebSocket.
+- **Captura de tela:** `getDisplayMedia` no renderer; no main, `session.setDisplayMediaRequestHandler`. No Linux/Wayland, o Chromium usa o portal (PipeWire) e o próprio sistema mostra o seletor. No Windows, o app mostra um seletor próprio (fontes de `desktopCapturer.getSources` com miniaturas).
+- **Áudio do sistema:**
+  - Linux: `@vencord/venmic` (MPL-2.0, o mesmo do Vesktop) cria um microfone virtual no PipeWire com o áudio de todos os apps **exceto o nosso** (sem eco de outras salas). O renderer captura esse dispositivo com `getUserMedia` (AEC/NS/AGC desligados) e publica como `ScreenShareAudio`.
+  - Windows: `audio: 'loopback'` no handler de display media. A verificar: excluir o áudio do próprio app.
+- **Assistir (estilo Discord):** o vídeo fica na janela principal: grade com as telas ao vivo da sala, clique para focar, tela cheia. Usar `adaptiveStream`/`dynacast` do `livekit-client` para que miniaturas peçam camadas baixas e só a tela em foco venha em alta.
+- **Publicação de tela:** `setScreenShareEnabled` com `contentHint: 'detail'`, 1080p30 e camadas de simulcast `h360fps3` e `h720fps15`. O áudio do sistema no Linux é publicado à parte (`publishTrack`, `ScreenShareAudio`, estéreo, `musicHighQualityStereo`, sem DTX/RED). Quando a transmissão para (inclusive pelo sistema), o áudio é derrubado junto (`LocalTrackUnpublished`).
 
-Todos fazem login no backend e pegam o token em `join-token`. Configuração por env: `SPIKE_API`, `SPIKE_USER`, `SPIKE_PASSWORD`, `SPIKE_ROOM`, `SPIKE_OUT`, `SPIKE_SOURCE`, `SPIKE_AUDIO`.
-- ✅ Vídeo no Linux/Wayland (Pop!_OS 24.04, COSMIC): o seletor do portal abriu, a captura saiu em 1920x1080 a 30 fps, e o `watch` recebeu o frame pelo LiveKit com a tela correta. A listagem mostrou `live {participants: 2, publishers: 1}`.
-- ✅ Áudio no Linux: com um tom de 440 Hz tocando, 82% da potência recebida estava em 440 Hz (Goertzel); sem o tom, 0%.
-- ❌ Assistir no WebKitGTK: sem WebRTC (ver acima).
-- ⏳ Windows (captura, áudio WASAPI, WebView2): não testado, precisa de uma máquina Windows. ⏳ Linux/X11: não testado.
+### Estrutura (`desktop/`)
+```
+src/shared/api.ts          # tipos compartilhados + interface DesktopApi (window.api)
+src/main/index.ts          # janela, IPC, permissões, perfis de dev
+src/main/backend.ts        # cliente do backend (tokens, refresh serializado)
+src/main/settings.ts       # servidor + refresh token (safeStorage) em userData
+src/main/screen.ts         # display media handler, seletor (Windows), venmic (Linux)
+src/preload/index.ts       # contextBridge → window.api
+src/renderer/src/          # React: App, pages/ (Login, Shell, RoomPage, AdminPage),
+                           # components/ (Stage, MembersPanel, Dialogs, SourcePicker), lib/api.ts
+e2e/two-users.mjs          # E2E com duas instâncias (Playwright + Electron)
+```
 
-### Requisitos de build (só para quem compila: dev e CI; o usuário final não precisa de nada disso)
-- **clang ≥ 21**: o libwebrtc do `webrtc-sys` vem compilado com a libc++ do Chromium e o build recusa um clang mais antigo. No Ubuntu 24.04, instalar pelo apt.llvm.org (`sudo ./llvm.sh 21`). `desktop/spike/.cargo/config.toml` aponta `CC`/`CXX` para o `clang-21`.
-- No Ubuntu 24.04, o clang escolhe o GCC 14 para os headers do libstdc++, mas eles só existem para o 13; o config passa `--gcc-install-dir=.../13`. Não é preciso se `libstdc++-14-dev` estiver instalado.
-- O webrtc-sys só usa os **headers** do GLib/GIO; o app precisa ligar `gio-2.0`, `gobject-2.0` e `glib-2.0` (no spike, via `build.rs`; no Tauri, o GTK já liga).
-- A captura no Wayland usa D-Bus assíncrono do GLib: sem um main loop do GLib rodando, o seletor nunca abre. No spike, usar a feature `glib-main-loop` do `livekit`. No Tauri, o loop do GTK já roda; verificar se a feature fica desnecessária ou atrapalha.
-- Pacotes Debian/Ubuntu: `build-essential pkg-config clang libclang-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libpipewire-0.3-dev libspa-0.2-dev libpulse-dev libx11-dev libxext-dev libxfixes-dev libxrandr-dev libxcomposite-dev libxdamage-dev libgl1-mesa-dev libgbm-dev libdrm-dev libva-dev`.
-- Para o usuário final, o libwebrtc vai **estático** dentro do binário. Em runtime: no Linux, WebKitGTK, GLib, PipeWire e xdg-desktop-portal (presentes em qualquer desktop moderno; o `.deb` declara as dependências, o AppImage embute); no Windows, o WebView2 (já vem no Windows 10/11).
+### Comandos e armadilhas
+```bash
+cd desktop && npm install
+npm run dev                                   # app com hot reload (backend + LiveKit rodando)
+npm run typecheck && npm run build
+SHARESCREEN_PROFILE=b npm run dev             # segunda instância/usuário (userData separado)
+SHARESCREEN_SERVER=https://... npm run dev    # servidor padrão da tela de login
+E2E_ADMIN=admin:senha E2E_VIEWER=viewer:senha E2E_OUT=/tmp/shots node e2e/two-users.mjs
+```
+- **O terminal do VS Code exporta `ELECTRON_RUN_AS_NODE=1`**, que faz o Electron rodar como Node puro (sem janela; `electron --version` mostra a versão do Node). Rode com `env -u ELECTRON_RUN_AS_NODE npm run dev`. O script E2E já remove a variável.
+- O `@vencord/venmic` é dependência opcional e nativa: precisa ficar em `external` no `electron.vite.config.ts`. Empacotado, ele não acha o binário. Exporta via CommonJS, então o `PatchBay` pode vir em `default` no `import()`.
+- No E2E com duas instâncias na mesma máquina, a B fica muda: senão a A captura o áudio que a B toca (são processos diferentes, o venmic só exclui o da própria instância).
+- **Verificado (Linux/Wayland, COSMIC), via E2E:** login, criar sala, adicionar membro, compartilhar (seletor do portal), assistir na outra instância (vídeo 1280x720 pela camada adaptativa) e o áudio do sistema pelo venmic (com o tom de 440 Hz tocando, o pico recebido foi para 439 Hz).
+- **Pendente:** testar no Windows (seletor próprio, `loopback` e se o áudio do próprio app entra na captura), empacotamento (`electron-builder`: deb, AppImage, NSIS, ícones) e ajustes de codec/qualidade.
+
+### Histórico do spike (Tauri, removido; ver commits até `833d4e9`)
+- O WebKitGTK 2.52 do Ubuntu 24.04 vem **sem backend WebRTC** (`RTCPeerConnection` indefinido), então o `livekit-client` não roda no WebView do Tauri no Linux.
+- A captura nativa com o `DesktopCapturer` do libwebrtc (portal/PipeWire) e o áudio pelo monitor do PulseAudio funcionaram. Uma recepção nativa servindo I420 por protocolo customizado e desenhando com WebGL chegou a 1080p e 30 fps. Mas manter mídia nativa em Rust mais a ponte com JS custaria bem mais que o Electron.
+- O SDK Rust do LiveKit exigia clang ≥ 21 no build. Com o Electron isso não se aplica.
 
 ## Ordem de implementação
 
@@ -208,8 +227,8 @@ Todos fazem login no backend e pegam o token em `join-token`. Configuração por
 2. ✅ Salas, membros, código de convite, transferência de posse, limpeza de salas temporárias, testes.
 3. ✅ Integração LiveKit: join-token, webhook, `live` na listagem, derrubar conexões, limpeza verificada no LiveKit, docker-compose de dev.
    - Pendente (quando o domínio estiver configurado): compose de produção na VPS (backend + LiveKit com TURN/TLS + proxy reverso com HTTPS, ex.: Caddy).
-4. 🔶 Spike de captura: ✅ vídeo e áudio no Linux/Wayland; ❌ assistir no WebKitGTK; pendentes: decidir como assistir no Linux, Windows e X11.
-5. App desktop.
+4. ✅ Spike de captura (Tauri): concluído. Levou à troca para Electron.
+5. 🔶 App desktop (Electron): ✅ esqueleto, auth via main, salas, membros, sala com compartilhar/assistir (estilo Discord), áudio do sistema no Linux, admin de usuários; pendentes: Windows, empacotamento, polimento.
 
 ## Decisões de produto
 
