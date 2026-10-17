@@ -24,6 +24,7 @@ import (
 	"p2p-share-screen/backend/internal/auth"
 	"p2p-share-screen/backend/internal/config"
 	"p2p-share-screen/backend/internal/httpapi"
+	"p2p-share-screen/backend/internal/rooms"
 	"p2p-share-screen/backend/internal/store"
 	"p2p-share-screen/backend/internal/users"
 )
@@ -74,10 +75,12 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		AccessTTL:  cfg.AccessTTL,
 		RefreshTTL: cfg.RefreshTTL,
 	})
+	roomSvc := rooms.NewService(st, cfg.TempRoomGrace)
 	api := httpapi.New(httpapi.Deps{
 		Store:      st,
 		Auth:       authSvc,
 		Users:      users.NewService(st, hasher),
+		Rooms:      roomSvc,
 		Logger:     logger,
 		TrustProxy: cfg.TrustProxy,
 	})
@@ -92,7 +95,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
 
-	go cleanupLoop(ctx, authSvc, logger)
+	go cleanupLoop(ctx, authSvc, roomSvc, logger)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
@@ -109,21 +112,25 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	return srv.Shutdown(shutdownCtx)
 }
 
-func cleanupLoop(ctx context.Context, authSvc *auth.Service, logger *slog.Logger) {
-	ticker := time.NewTicker(time.Hour)
+// cleanupLoop periodically deletes expired refresh tokens and temporary
+// rooms that have been empty past their grace period.
+func cleanupLoop(ctx context.Context, authSvc *auth.Service, roomSvc *rooms.Service, logger *slog.Logger) {
+	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n, err := authSvc.CleanupExpired(ctx)
-			if err != nil {
+			if n, err := authSvc.CleanupExpired(ctx); err != nil {
 				logger.Error("cleanup expired refresh tokens", "err", err)
-				continue
-			}
-			if n > 0 {
+			} else if n > 0 {
 				logger.Info("deleted expired refresh tokens", "count", n)
+			}
+			if ids, err := roomSvc.DeleteExpiredTemporary(ctx); err != nil {
+				logger.Error("cleanup empty temporary rooms", "err", err)
+			} else if len(ids) > 0 {
+				logger.Info("deleted empty temporary rooms", "room_ids", ids)
 			}
 		}
 	}

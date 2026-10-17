@@ -13,6 +13,7 @@ import (
 
 	"p2p-share-screen/backend/internal/auth"
 	"p2p-share-screen/backend/internal/httpapi"
+	"p2p-share-screen/backend/internal/rooms"
 	"p2p-share-screen/backend/internal/store"
 	"p2p-share-screen/backend/internal/testutil"
 	"p2p-share-screen/backend/internal/users"
@@ -36,6 +37,7 @@ func newTestAPI(t *testing.T) (*testAPI, *users.Service) {
 			RefreshTTL: time.Hour,
 		}),
 		Users:  userSvc,
+		Rooms:  rooms.NewService(st, rooms.DefaultEmptyGrace),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	srv := httptest.NewServer(api)
@@ -204,6 +206,104 @@ func TestLoginRateLimit(t *testing.T) {
 	last := 0
 	for range 11 {
 		last = api.do("POST", "/api/auth/login", "", map[string]string{"username": "x", "password": "y"}, nil)
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("11th attempt status = %d, want 429", last)
+	}
+}
+
+type roomResp struct {
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	Temporary  bool   `json:"temporary"`
+	JoinCode   string `json:"join_code"`
+	MyRole     string `json:"my_role"`
+	CanManage  bool   `json:"can_manage"`
+	CanPublish bool   `json:"can_publish"`
+}
+
+func TestRoomsFlow(t *testing.T) {
+	api, userSvc := newTestAPI(t)
+	ctx := context.Background()
+	userSvc.Create(ctx, users.CreateInput{Username: "alice", DisplayName: "Alice Smith", Password: "alice password"})
+	bobUser, _ := userSvc.Create(ctx, users.CreateInput{Username: "bob", Password: "bob password"})
+	alice := api.login("alice", "alice password").AccessToken
+	bob := api.login("bob", "bob password").AccessToken
+
+	// Any user can search the directory to find people to add.
+	var dir struct {
+		Users []struct {
+			ID       string `json:"id"`
+			Username string `json:"username"`
+		} `json:"users"`
+	}
+	if code := api.do("GET", "/api/users?q=smi", bob, nil, &dir); code != 200 || len(dir.Users) != 1 || dir.Users[0].Username != "alice" {
+		t.Fatalf("directory: %d %+v", code, dir)
+	}
+
+	var temp roomResp
+	if code := api.do("POST", "/api/rooms", alice, map[string]string{"name": "Pair", "type": "private"}, &temp); code != 201 {
+		t.Fatalf("create: %d", code)
+	}
+	if !temp.Temporary || len(temp.JoinCode) != 9 || !temp.CanManage || temp.MyRole != "owner" {
+		t.Fatalf("created room: %+v", temp)
+	}
+
+	var e errResp
+	if code := api.do("GET", "/api/rooms/"+temp.ID, bob, nil, &e); code != 404 || e.Error.Code != "room_not_found" {
+		t.Fatalf("non-member get: %d %+v", code, e)
+	}
+
+	var joined roomResp
+	if code := api.do("POST", "/api/rooms/join-by-code", bob, map[string]string{"code": temp.JoinCode}, &joined); code != 200 {
+		t.Fatalf("join: %d", code)
+	}
+	if joined.ID != temp.ID || joined.MyRole != "member" || joined.JoinCode != "" || joined.CanManage || !joined.CanPublish {
+		t.Fatalf("member view must not expose the code: %+v", joined)
+	}
+
+	var fixed roomResp
+	api.do("POST", "/api/rooms", alice, map[string]string{"name": "Team", "type": "restricted"}, &fixed)
+	if code := api.do("POST", "/api/rooms/"+fixed.ID+"/members", alice,
+		map[string]any{"user_id": bobUser.ID, "can_publish": false}, nil); code != 201 {
+		t.Fatalf("add member: %d", code)
+	}
+	var list struct {
+		Rooms []roomResp `json:"rooms"`
+	}
+	if code := api.do("GET", "/api/rooms", bob, nil, &list); code != 200 || len(list.Rooms) != 2 {
+		t.Fatalf("bob rooms: %d %+v", code, list)
+	}
+
+	if code := api.do("POST", "/api/rooms/"+fixed.ID+"/owner", alice, map[string]string{"user_id": bobUser.ID}, nil); code != 200 {
+		t.Fatalf("transfer: %d", code)
+	}
+	var members struct {
+		Members []struct {
+			Username string `json:"username"`
+			Role     string `json:"role"`
+		} `json:"members"`
+	}
+	api.do("GET", "/api/rooms/"+fixed.ID+"/members", alice, nil, &members)
+	if len(members.Members) != 2 || members.Members[0].Username != "bob" || members.Members[0].Role != "owner" {
+		t.Fatalf("members after transfer: %+v", members)
+	}
+
+	if code := api.do("DELETE", "/api/rooms/"+temp.ID, bob, nil, &e); code != 403 || e.Error.Code != "not_room_owner" {
+		t.Fatalf("member delete: %d %+v", code, e)
+	}
+	if code := api.do("DELETE", "/api/rooms/"+temp.ID, alice, nil, nil); code != 204 {
+		t.Fatalf("owner delete: %d", code)
+	}
+}
+
+func TestJoinByCodeRateLimit(t *testing.T) {
+	api, userSvc := newTestAPI(t)
+	userSvc.Create(context.Background(), users.CreateInput{Username: "mallory", Password: "mallory password"})
+	tok := api.login("mallory", "mallory password").AccessToken
+	last := 0
+	for range 11 {
+		last = api.do("POST", "/api/rooms/join-by-code", tok, map[string]string{"code": "AAAA-AAAA"}, nil)
 	}
 	if last != http.StatusTooManyRequests {
 		t.Fatalf("11th attempt status = %d, want 429", last)

@@ -11,6 +11,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"p2p-share-screen/backend/internal/auth"
+	"p2p-share-screen/backend/internal/rooms"
 	"p2p-share-screen/backend/internal/store"
 	"p2p-share-screen/backend/internal/users"
 )
@@ -19,6 +20,7 @@ type Deps struct {
 	Store  *store.Store
 	Auth   *auth.Service
 	Users  *users.Service
+	Rooms  *rooms.Service
 	Logger *slog.Logger
 	// TrustProxy takes the client IP from X-Forwarded-For.
 	TrustProxy bool
@@ -28,10 +30,12 @@ type Server struct {
 	store      *store.Store
 	auth       *auth.Service
 	users      *users.Service
+	rooms      *rooms.Service
 	log        *slog.Logger
 	trustProxy bool
 
 	loginLimiter *rateLimiter
+	codeLimiter  *rateLimiter
 	handler      http.Handler
 }
 
@@ -40,10 +44,13 @@ func New(d Deps) *Server {
 		store:      d.Store,
 		auth:       d.Auth,
 		users:      d.Users,
+		rooms:      d.Rooms,
 		log:        d.Logger,
 		trustProxy: d.TrustProxy,
 		// 10 attempts at once, then one every 6 seconds per IP.
 		loginLimiter: newRateLimiter(rate.Every(6*time.Second), 10),
+		// Join codes: 10 attempts at once, then one every 6 seconds per user.
+		codeLimiter: newRateLimiter(rate.Every(6*time.Second), 10),
 	}
 	s.handler = s.routes()
 	return s
@@ -69,6 +76,21 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/admin/users/{id}", s.admin(s.handleGetUser))
 	mux.Handle("PATCH /api/admin/users/{id}", s.admin(s.handleUpdateUser))
 	mux.Handle("DELETE /api/admin/users/{id}", s.admin(s.handleDeleteUser))
+
+	mux.Handle("GET /api/users", s.authed(s.handleDirectory))
+
+	mux.Handle("GET /api/rooms", s.authed(s.handleListRooms))
+	mux.Handle("POST /api/rooms", s.authed(s.handleCreateRoom))
+	mux.Handle("POST /api/rooms/join-by-code", s.authed(s.handleJoinByCode))
+	mux.Handle("GET /api/rooms/{id}", s.authed(s.handleGetRoom))
+	mux.Handle("PATCH /api/rooms/{id}", s.authed(s.handleUpdateRoom))
+	mux.Handle("DELETE /api/rooms/{id}", s.authed(s.handleDeleteRoom))
+	mux.Handle("POST /api/rooms/{id}/code/regenerate", s.authed(s.handleRegenerateCode))
+	mux.Handle("POST /api/rooms/{id}/owner", s.authed(s.handleTransferOwner))
+	mux.Handle("GET /api/rooms/{id}/members", s.authed(s.handleListMembers))
+	mux.Handle("POST /api/rooms/{id}/members", s.authed(s.handleAddMember))
+	mux.Handle("PATCH /api/rooms/{id}/members/{uid}", s.authed(s.handleUpdateMember))
+	mux.Handle("DELETE /api/rooms/{id}/members/{uid}", s.authed(s.handleRemoveMember))
 
 	return s.logRequests(s.recoverPanics(mux))
 }

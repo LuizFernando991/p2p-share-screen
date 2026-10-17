@@ -44,6 +44,26 @@ type updateUserRequest struct {
 	Password    *string     `json:"password"`
 }
 
+// directoryUserDTO is the public view of a user, visible to everyone.
+type directoryUserDTO struct {
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+}
+
+func (s *Server) handleDirectory(w http.ResponseWriter, r *http.Request, _ store.User) {
+	list, err := s.users.Directory(r.Context(), r.URL.Query().Get("q"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	out := make([]directoryUserDTO, 0, len(list))
+	for _, u := range list {
+		out = append(out, directoryUserDTO{ID: u.ID, Username: u.Username, DisplayName: u.DisplayName})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": out})
+}
+
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request, _ store.User) {
 	list, err := s.users.List(r.Context())
 	if err != nil {

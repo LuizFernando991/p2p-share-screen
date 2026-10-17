@@ -18,6 +18,9 @@ type Config struct {
 	// TrustProxy makes the client IP come from X-Forwarded-For. Enable only
 	// behind a reverse proxy that overwrites that header.
 	TrustProxy bool
+	// TempRoomGrace is how long a private (temporary) room may stay empty
+	// before it is deleted.
+	TempRoomGrace time.Duration
 }
 
 func Load() (Config, error) {
@@ -31,6 +34,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.RefreshTTL, err = envDuration("APP_REFRESH_TTL", 30*24*time.Hour); err != nil {
+		return Config{}, err
+	}
+	if cfg.TempRoomGrace, err = envDuration("APP_TEMP_ROOM_GRACE", 5*time.Minute); err != nil {
 		return Config{}, err
 	}
 	if cfg.TrustProxy, err = envBool("APP_TRUST_PROXY", false); err != nil {

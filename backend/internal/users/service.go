@@ -90,6 +90,13 @@ func (s *Service) List(ctx context.Context) ([]store.User, error) {
 	return s.store.ListUsers(ctx)
 }
 
+const directoryLimit = 20
+
+// Directory finds active users by name, so room owners can add members.
+func (s *Service) Directory(ctx context.Context, query string) ([]store.User, error) {
+	return s.store.SearchActiveUsers(ctx, strings.TrimSpace(query), directoryLimit)
+}
+
 func (s *Service) Get(ctx context.Context, userID string) (store.User, error) {
 	u, err := s.store.GetUserByID(ctx, userID)
 	if errors.Is(err, store.ErrNotFound) {

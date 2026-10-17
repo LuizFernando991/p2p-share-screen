@@ -31,7 +31,7 @@ backend/            # Go: API REST
   internal/
     auth/           # hash de senha, JWT de acesso, refresh tokens, middleware
     users/          # CRUD de usuários (somente admin)
-    rooms/          # salas, membros, códigos de convite, regras de acesso
+    rooms/          # salas, membros, códigos de convite, TODAS as regras de acesso a sala
     livekit/        # emissão de token LiveKit, webhook, chamadas à API do LiveKit
     httpapi/        # roteamento, handlers, erros, JSON
     store/          # acesso ao SQLite: todo SQL do projeto fica aqui
@@ -73,15 +73,21 @@ deploy/             # docker-compose (backend + LiveKit), livekit.yaml
 ### Salas
 Qualquer usuário logado pode criar uma sala e vira o **dono**. Há dois tipos:
 
-| Tipo | Como se entra | Quem gerencia |
-|---|---|---|
-| `restricted` | Só quem está na lista de membros, definida pelo dono | Dono adiciona/remove membros |
-| `private` | Quem tiver o **código** da sala | Dono pode regenerar o código (o antigo deixa de valer) |
+| Tipo | Duração | Como se entra | Dono pode sair? |
+|---|---|---|---|
+| `restricted` (**fixa**) | Permanente | Lista de membros, definida pelo dono | Sim, depois de **transferir a posse** para outro membro (`POST /api/rooms/{id}/owner`) |
+| `private` (**temporária**) | Apagada depois de ficar **vazia** (ninguém conectado no LiveKit) por `APP_TEMP_ROOM_GRACE` (padrão 5 min) | Quem tiver o **código** | Não: ele apaga a sala, ou ela acaba sozinha ao esvaziar |
 
-- Membros (`room_members`): `role` = `owner` | `member`, mais a flag `can_publish` (se pode transmitir; padrão `true`).
-- Entrar com código válido numa sala `private` adiciona o usuário como membro (ele consegue voltar sem o código). Regenerar o código não remove quem já entrou.
-- O admin enxerga e pode apagar qualquer sala.
-- Código de convite: curto, legível, sem caracteres ambíguos (ex.: `K7QF-2MXP`), gerado com `crypto/rand`. Tentativas de código têm rate limit por usuário e por IP.
+- Toda regra de permissão fica em `internal/rooms` (`authorize`, `CanManage`, `CanPublish`).
+- Membros (`room_members`): `role` = `owner` | `member`, mais a flag `can_publish` (se pode transmitir; padrão `true`). O dono também é uma linha em `room_members` e sempre pode transmitir.
+- Numa sala fixa, os membros entram e transmitem a qualquer hora, mesmo com o dono offline.
+- Só o dono (ou o admin) adiciona/remove membros, muda `can_publish`, renomeia, apaga e regenera o código. Um membro pode sair por conta própria (`DELETE /members/{seu id}`).
+- Entrar com código válido adiciona o usuário como membro (ele volta sem o código). Regenerar o código não remove quem já entrou. O código só aparece na resposta para o dono e o admin.
+- Sala temporária: a coluna `rooms.empty_since` marca desde quando ela está vazia (começa preenchida na criação). Na fase 3, os webhooks do LiveKit limpam essa coluna quando alguém entra e a preenchem quando o último sai. A rotina `cleanupLoop` (a cada 1 min) apaga as que passaram do prazo.
+- Apagar um usuário apaga as salas de que ele é dono (cascade).
+- O admin enxerga e gerencia qualquer sala.
+- Código de convite: 8 caracteres de um alfabeto de 32 símbolos sem `0/1/I/O`, exibido como `K7QF-2MXP`, gerado com `crypto/rand`. A entrada aceita minúsculas, com ou sem hífen. Tentativas têm rate limit por usuário.
+- Para o dono achar quem adicionar, `GET /api/users?q=` busca usuários ativos (só id, username e nome).
 - O nome da sala no LiveKit é o `id` da sala no nosso banco.
 
 ### Fluxo para entrar e transmitir
@@ -107,19 +113,22 @@ GET    /api/admin/users/{id}
 PATCH  /api/admin/users/{id}           {display_name?, role?, disabled?, password?}
 DELETE /api/admin/users/{id}
 
+GET    /api/users?q=                   busca de usuários ativos (qualquer logado)
+
 # salas
 GET    /api/rooms                      salas em que sou membro/dono (admin: todas)
-POST   /api/rooms                      {name, type}
+POST   /api/rooms                      {name, type: restricted|private}
 GET    /api/rooms/{id}
-PATCH  /api/rooms/{id}                 dono/admin
+PATCH  /api/rooms/{id}                 dono/admin: {name}
 DELETE /api/rooms/{id}                 dono/admin
-POST   /api/rooms/{id}/code/regenerate dono (só private)
+POST   /api/rooms/{id}/code/regenerate dono/admin (só private)
+POST   /api/rooms/{id}/owner           dono/admin: {user_id} (só restricted; alvo precisa ser membro)
 POST   /api/rooms/join-by-code         {code}
 GET    /api/rooms/{id}/members
-POST   /api/rooms/{id}/members         dono: {user_id, can_publish}
-PATCH  /api/rooms/{id}/members/{uid}   dono: can_publish
-DELETE /api/rooms/{id}/members/{uid}   dono, ou o próprio membro saindo
-POST   /api/rooms/{id}/join-token      → {livekit_url, token}
+POST   /api/rooms/{id}/members         dono/admin: {user_id, can_publish?}
+PATCH  /api/rooms/{id}/members/{uid}   dono/admin: {can_publish}
+DELETE /api/rooms/{id}/members/{uid}   dono/admin, ou o próprio membro saindo
+POST   /api/rooms/{id}/join-token      (fase 3) → {livekit_url, token}
 
 POST   /api/livekit/webhook
 GET    /healthz
@@ -132,7 +141,7 @@ Erros sempre no formato `{"error": {"code": "room_not_found", "message": "..."}}
 - Identificadores, código e mensagens de commit em inglês; documentação e conversa em português.
 - IDs são UUIDv7 (ordenáveis), salvos como TEXT. Datas em UTC, RFC 3339.
 - Toda checagem de permissão fica em `internal/rooms` (ou `auth`), nunca espalhada nos handlers. Handler fino: decodifica, chama o serviço, serializa.
-- Config só por variáveis de ambiente (`APP_ADDR`, `APP_DB_PATH`, `APP_JWT_SECRET`, `APP_ACCESS_TTL`, `APP_REFRESH_TTL`, `APP_TRUST_PROXY`; na fase 3, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`). Segredos nunca entram no repo; `backend/.env.example` documenta as variáveis.
+- Config só por variáveis de ambiente (`APP_ADDR`, `APP_DB_PATH`, `APP_JWT_SECRET`, `APP_ACCESS_TTL`, `APP_REFRESH_TTL`, `APP_TRUST_PROXY`, `APP_TEMP_ROOM_GRACE`; na fase 3, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`). Segredos nunca entram no repo; `backend/.env.example` documenta as variáveis.
 - Serviços retornam `*apperr.Error` para erros esperados (o código vira o `error.code` da resposta); qualquer outro erro vira 500 genérico e é logado. Erros de `store` (`ErrNotFound`, `ErrConflict`) são traduzidos para `apperr` no serviço.
 - Testes usam `auth.FastPasswordParams` (argon2 barato) e `testutil.OpenStore` (banco em diretório temporário).
 - `context.Context` em toda função que faz I/O.
@@ -166,8 +175,8 @@ docker compose -f deploy/docker-compose.yml up  # LiveKit (modo dev)
 ## Ordem de implementação
 
 1. ✅ Backend: config, SQLite + migrations, usuários, login/refresh, subcomando de admin, testes.
-2. Salas, membros, código de convite, regras de acesso, testes.
-3. Integração LiveKit: join-token, webhook, remoção de participantes; docker-compose com LiveKit.
+2. ✅ Salas, membros, código de convite, transferência de posse, limpeza de salas temporárias, testes.
+3. Integração LiveKit: join-token, webhook (atualizar `empty_since`), remoção de participantes (ao remover membro, tirar `can_publish`, desativar usuário ou apagar sala), `DeleteRoom` no LiveKit quando a sala temporária expira; docker-compose com LiveKit.
 4. Spike de captura de tela no Tauri (Windows e Linux).
 5. App desktop.
 
@@ -177,4 +186,4 @@ docker compose -f deploy/docker-compose.yml up  # LiveKit (modo dev)
 - **Código da sala `private`:** não expira; só muda quando o dono regenera.
 - **Convites em sala `restricted`:** só o dono adiciona e remove membros.
 - **Controle remoto / anotação:** fora do escopo.
-- **Deploy:** VPS própria com IP público. O LiveKit precisa de portas UDP abertas (RTC 50000–60000, TURN/UDP 3478) e de TLS (TURN/TLS 5349 ou 443). **Pendente:** definir o domínio, necessário para os certificados TLS da API e do LiveKit.
+- **Deploy:** VPS própria com IP público. O LiveKit precisa de portas UDP abertas (RTC 50000–60000, TURN/UDP 3478) e de TLS (TURN/TLS 5349 ou 443). O usuário tem um domínio e vai configurá-lo depois; até lá, deixar host/URLs sempre configuráveis por env, nunca fixos no código.

@@ -124,7 +124,8 @@ func parseNullTime(s sql.NullString) (*time.Time, error) {
 
 func isUniqueViolation(err error) bool {
 	var se *sqlite.Error
-	return errors.As(err, &se) && se.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE
+	return errors.As(err, &se) &&
+		(se.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || se.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY)
 }
 
 type scanner interface {
