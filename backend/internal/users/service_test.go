@@ -24,7 +24,7 @@ func setup(t *testing.T) (*users.Service, *auth.Service) {
 		AccessTTL:  time.Minute,
 		RefreshTTL: time.Hour,
 	})
-	return users.NewService(st, hasher), authSvc
+	return users.NewService(st, hasher, nil), authSvc
 }
 
 func wantCode(t *testing.T, err error, code string) {

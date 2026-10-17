@@ -17,16 +17,23 @@ import (
 )
 
 type Deps struct {
-	Store  *store.Store
-	Auth   *auth.Service
-	Users  *users.Service
-	Rooms  *rooms.Service
-	Logger *slog.Logger
+	Store *store.Store
+	Auth  *auth.Service
+	Users *users.Service
+	Rooms *rooms.Service
+	// Webhooks verifies and decodes media server webhooks.
+	Webhooks WebhookReceiver
+	Logger   *slog.Logger
 	// TrustProxy takes the client IP from X-Forwarded-For.
 	TrustProxy bool
 }
 
+type WebhookReceiver interface {
+	ReceiveWebhook(r *http.Request) (rooms.MediaEvent, error)
+}
+
 type Server struct {
+	webhooks   WebhookReceiver
 	store      *store.Store
 	auth       *auth.Service
 	users      *users.Service
@@ -45,6 +52,7 @@ func New(d Deps) *Server {
 		auth:       d.Auth,
 		users:      d.Users,
 		rooms:      d.Rooms,
+		webhooks:   d.Webhooks,
 		log:        d.Logger,
 		trustProxy: d.TrustProxy,
 		// 10 attempts at once, then one every 6 seconds per IP.
@@ -91,6 +99,10 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("POST /api/rooms/{id}/members", s.authed(s.handleAddMember))
 	mux.Handle("PATCH /api/rooms/{id}/members/{uid}", s.authed(s.handleUpdateMember))
 	mux.Handle("DELETE /api/rooms/{id}/members/{uid}", s.authed(s.handleRemoveMember))
+	mux.Handle("POST /api/rooms/{id}/join-token", s.authed(s.handleJoinToken))
+
+	// Authenticated by the LiveKit signature, not by a user token.
+	mux.HandleFunc("POST /api/livekit/webhook", s.handleLiveKitWebhook)
 
 	return s.logRequests(s.recoverPanics(mux))
 }

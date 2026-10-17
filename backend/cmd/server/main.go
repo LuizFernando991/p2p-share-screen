@@ -24,6 +24,7 @@ import (
 	"p2p-share-screen/backend/internal/auth"
 	"p2p-share-screen/backend/internal/config"
 	"p2p-share-screen/backend/internal/httpapi"
+	"p2p-share-screen/backend/internal/livekit"
 	"p2p-share-screen/backend/internal/rooms"
 	"p2p-share-screen/backend/internal/store"
 	"p2p-share-screen/backend/internal/users"
@@ -75,12 +76,20 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		AccessTTL:  cfg.AccessTTL,
 		RefreshTTL: cfg.RefreshTTL,
 	})
-	roomSvc := rooms.NewService(st, cfg.TempRoomGrace)
+	lk := livekit.New(livekit.Config{
+		URL:       cfg.LiveKitURL,
+		APIURL:    cfg.LiveKitAPIURL,
+		APIKey:    cfg.LiveKitAPIKey,
+		APISecret: cfg.LiveKitAPISecret,
+		TokenTTL:  cfg.LiveKitTokenTTL,
+	})
+	roomSvc := rooms.NewService(st, lk, cfg.TempRoomGrace, logger)
 	api := httpapi.New(httpapi.Deps{
 		Store:      st,
 		Auth:       authSvc,
-		Users:      users.NewService(st, hasher),
+		Users:      users.NewService(st, hasher, roomSvc),
 		Rooms:      roomSvc,
+		Webhooks:   lk,
 		Logger:     logger,
 		TrustProxy: cfg.TrustProxy,
 	})
@@ -157,7 +166,7 @@ func adminCreate(ctx context.Context, cfg config.Config, args []string) error {
 	}
 	defer st.Close()
 
-	u, err := users.NewService(st, auth.NewPasswordHasher(auth.DefaultPasswordParams)).Create(ctx, users.CreateInput{
+	u, err := users.NewService(st, auth.NewPasswordHasher(auth.DefaultPasswordParams), nil).Create(ctx, users.CreateInput{
 		Username:    *username,
 		DisplayName: *displayName,
 		Password:    password,

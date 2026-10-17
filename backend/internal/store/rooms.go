@@ -148,12 +148,33 @@ func (q *Queries) DeleteRoom(ctx context.Context, id string) error {
 	return requireAffected(res)
 }
 
-// DeleteEmptyPrivateRooms deletes private rooms empty since before cutoff
-// and returns their ids.
-func (q *Queries) DeleteEmptyPrivateRooms(ctx context.Context, cutoff time.Time) ([]string, error) {
+// TouchRoomEmptySince restarts the empty grace period of a room that is
+// currently marked empty.
+func (q *Queries) TouchRoomEmptySince(ctx context.Context, id string, at time.Time) error {
+	_, err := q.db.ExecContext(ctx,
+		`UPDATE rooms SET empty_since = ? WHERE id = ? AND empty_since IS NOT NULL`, formatTime(at), id)
+	return err
+}
+
+// DeletePrivateRoomIfEmptySince deletes the private room only if it is still
+// marked empty since before cutoff. It reports whether it was deleted.
+func (q *Queries) DeletePrivateRoomIfEmptySince(ctx context.Context, id string, cutoff time.Time) (bool, error) {
+	res, err := q.db.ExecContext(ctx,
+		`DELETE FROM rooms WHERE id = ? AND type = 'private' AND empty_since IS NOT NULL AND empty_since < ?`,
+		id, formatTime(cutoff))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// ListEmptyPrivateRooms returns the ids of private rooms empty since before
+// cutoff.
+func (q *Queries) ListEmptyPrivateRooms(ctx context.Context, cutoff time.Time) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx,
-		`DELETE FROM rooms WHERE type = 'private' AND empty_since IS NOT NULL AND empty_since < ?
-		 RETURNING id`, formatTime(cutoff))
+		`SELECT id FROM rooms WHERE type = 'private' AND empty_since IS NOT NULL AND empty_since < ?`,
+		formatTime(cutoff))
 	if err != nil {
 		return nil, err
 	}

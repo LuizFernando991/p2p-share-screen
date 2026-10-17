@@ -3,6 +3,8 @@ package httpapi_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -11,8 +13,11 @@ import (
 	"testing"
 	"time"
 
+	lkauth "github.com/livekit/protocol/auth"
+
 	"p2p-share-screen/backend/internal/auth"
 	"p2p-share-screen/backend/internal/httpapi"
+	"p2p-share-screen/backend/internal/livekit"
 	"p2p-share-screen/backend/internal/rooms"
 	"p2p-share-screen/backend/internal/store"
 	"p2p-share-screen/backend/internal/testutil"
@@ -22,13 +27,24 @@ import (
 type testAPI struct {
 	t   *testing.T
 	srv *httptest.Server
+	st  *store.Store
 }
+
+const (
+	lkKey    = "test-key"
+	lkSecret = "test-livekit-secret-test-livekit-secret"
+)
 
 func newTestAPI(t *testing.T) (*testAPI, *users.Service) {
 	t.Helper()
 	st := testutil.OpenStore(t)
 	hasher := auth.NewPasswordHasher(auth.FastPasswordParams)
-	userSvc := users.NewService(st, hasher)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// Real LiveKit client against a closed port: tokens and webhook checks are
+	// real, server API calls fail fast (and are best effort).
+	lk := livekit.New(livekit.Config{URL: "ws://127.0.0.1:1", APIKey: lkKey, APISecret: lkSecret, TokenTTL: time.Minute})
+	roomSvc := rooms.NewService(st, lk, rooms.DefaultEmptyGrace, log)
+	userSvc := users.NewService(st, hasher, roomSvc)
 	api := httpapi.New(httpapi.Deps{
 		Store: st,
 		Auth: auth.NewService(st, hasher, auth.Config{
@@ -36,13 +52,14 @@ func newTestAPI(t *testing.T) (*testAPI, *users.Service) {
 			AccessTTL:  time.Minute,
 			RefreshTTL: time.Hour,
 		}),
-		Users:  userSvc,
-		Rooms:  rooms.NewService(st, rooms.DefaultEmptyGrace),
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Users:    userSvc,
+		Rooms:    roomSvc,
+		Webhooks: lk,
+		Logger:   log,
 	})
 	srv := httptest.NewServer(api)
 	t.Cleanup(srv.Close)
-	return &testAPI{t: t, srv: srv}, userSvc
+	return &testAPI{t: t, srv: srv, st: st}, userSvc
 }
 
 // do sends a JSON request and decodes the JSON response into out (if non-nil).
@@ -307,5 +324,143 @@ func TestJoinByCodeRateLimit(t *testing.T) {
 	}
 	if last != http.StatusTooManyRequests {
 		t.Fatalf("11th attempt status = %d, want 429", last)
+	}
+}
+
+func TestJoinToken(t *testing.T) {
+	api, userSvc := newTestAPI(t)
+	ctx := context.Background()
+	alice, _ := userSvc.Create(ctx, users.CreateInput{Username: "alice", DisplayName: "Alice", Password: "alice password"})
+	bob, _ := userSvc.Create(ctx, users.CreateInput{Username: "bob", Password: "bob password"})
+	userSvc.Create(ctx, users.CreateInput{Username: "carol", Password: "carol password"})
+	aliceTok := api.login("alice", "alice password").AccessToken
+	bobTok := api.login("bob", "bob password").AccessToken
+	carolTok := api.login("carol", "carol password").AccessToken
+
+	var room roomResp
+	api.do("POST", "/api/rooms", aliceTok, map[string]string{"name": "Team", "type": "restricted"}, &room)
+	api.do("POST", "/api/rooms/"+room.ID+"/members", aliceTok, map[string]any{"user_id": bob.ID, "can_publish": false}, nil)
+
+	type joinResp struct {
+		URL   string `json:"livekit_url"`
+		Token string `json:"token"`
+	}
+	grants := func(token string) *lkauth.ClaimGrants {
+		t.Helper()
+		v, err := lkauth.ParseAPIToken(token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, claims, err := v.Verify(lkSecret)
+		if err != nil {
+			t.Fatalf("token does not verify with the LiveKit secret: %v", err)
+		}
+		return claims
+	}
+
+	var jr joinResp
+	if code := api.do("POST", "/api/rooms/"+room.ID+"/join-token", aliceTok, nil, &jr); code != 200 {
+		t.Fatalf("owner join-token: %d", code)
+	}
+	g := grants(jr.Token)
+	if jr.URL != "ws://127.0.0.1:1" || g.Identity != alice.ID || g.Name != "Alice" ||
+		g.Video.Room != room.ID || !g.Video.RoomJoin || !g.Video.GetCanPublish() || !g.Video.GetCanSubscribe() {
+		t.Fatalf("owner grants: url=%s %+v %+v", jr.URL, g, g.Video)
+	}
+	if srcs := g.Video.CanPublishSources; len(srcs) != 2 {
+		t.Fatalf("publish sources = %v, want screen share only", srcs)
+	}
+
+	api.do("POST", "/api/rooms/"+room.ID+"/join-token", bobTok, nil, &jr)
+	if g := grants(jr.Token); g.Video.GetCanPublish() || !g.Video.GetCanSubscribe() {
+		t.Fatalf("viewer grants: %+v", g.Video)
+	}
+
+	var e errResp
+	if code := api.do("POST", "/api/rooms/"+room.ID+"/join-token", carolTok, nil, &e); code != 404 {
+		t.Fatalf("non-member join-token: %d %+v", code, e)
+	}
+
+	// Live info is omitted (unknown) because LiveKit is unreachable here.
+	var got struct {
+		Live *struct{} `json:"live"`
+	}
+	if code := api.do("GET", "/api/rooms/"+room.ID, aliceTok, nil, &got); code != 200 || got.Live != nil {
+		t.Fatalf("get room with media down: %d %+v", code, got)
+	}
+}
+
+func (a *testAPI) webhook(body string, secret string) int {
+	a.t.Helper()
+	sum := sha256.Sum256([]byte(body))
+	token, err := lkauth.NewAccessToken(lkKey, secret).
+		SetValidFor(time.Minute).
+		SetSha256(base64.StdEncoding.EncodeToString(sum[:])).
+		ToJWT()
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	req, _ := http.NewRequest("POST", a.srv.URL+"/api/livekit/webhook", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/webhook+json")
+	req.Header.Set("Authorization", token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	res.Body.Close()
+	return res.StatusCode
+}
+
+func TestLiveKitWebhook(t *testing.T) {
+	api, userSvc := newTestAPI(t)
+	ctx := context.Background()
+	userSvc.Create(ctx, users.CreateInput{Username: "alice", Password: "alice password"})
+	tok := api.login("alice", "alice password").AccessToken
+	var room roomResp
+	api.do("POST", "/api/rooms", tok, map[string]string{"name": "Pair", "type": "private"}, &room)
+
+	emptySince := func() *time.Time {
+		r, err := api.st.GetRoom(ctx, room.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.EmptySince
+	}
+
+	if code := api.webhook(`{"event":"participant_joined","room":{"name":"`+room.ID+`"}}`, lkSecret); code != 204 {
+		t.Fatalf("participant_joined: %d", code)
+	}
+	if emptySince() != nil {
+		t.Fatal("room still marked empty after participant_joined")
+	}
+	if code := api.webhook(`{"event":"room_finished","room":{"name":"`+room.ID+`"}}`, lkSecret); code != 204 {
+		t.Fatalf("room_finished: %d", code)
+	}
+	if emptySince() == nil {
+		t.Fatal("room not marked empty after room_finished")
+	}
+
+	// Wrong secret: rejected and ignored.
+	if code := api.webhook(`{"event":"participant_joined","room":{"name":"`+room.ID+`"}}`, "wrong-secret-wrong-secret-wrong-secret"); code != 401 {
+		t.Fatalf("bad signature: %d", code)
+	}
+	if emptySince() == nil {
+		t.Fatal("unsigned webhook changed state")
+	}
+
+	// Body tampered after signing: checksum mismatch.
+	sum := sha256.Sum256([]byte(`{"event":"room_finished"}`))
+	token, _ := lkauth.NewAccessToken(lkKey, lkSecret).SetValidFor(time.Minute).
+		SetSha256(base64.StdEncoding.EncodeToString(sum[:])).ToJWT()
+	req, _ := http.NewRequest("POST", api.srv.URL+"/api/livekit/webhook",
+		bytes.NewBufferString(`{"event":"participant_joined","room":{"name":"`+room.ID+`"}}`))
+	req.Header.Set("Authorization", token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 401 {
+		t.Fatalf("tampered body: %d", res.StatusCode)
 	}
 }

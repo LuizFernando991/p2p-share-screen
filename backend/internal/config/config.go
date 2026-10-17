@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,6 +22,15 @@ type Config struct {
 	// TempRoomGrace is how long a private (temporary) room may stay empty
 	// before it is deleted.
 	TempRoomGrace time.Duration
+
+	// LiveKitURL is the ws(s):// address handed to clients.
+	LiveKitURL string
+	// LiveKitAPIURL is the http(s):// address the backend calls; empty means
+	// derived from LiveKitURL.
+	LiveKitAPIURL    string
+	LiveKitAPIKey    string
+	LiveKitAPISecret string
+	LiveKitTokenTTL  time.Duration
 }
 
 func Load() (Config, error) {
@@ -28,6 +38,11 @@ func Load() (Config, error) {
 		Addr:      env("APP_ADDR", ":8080"),
 		DBPath:    env("APP_DB_PATH", "./data/app.db"),
 		JWTSecret: []byte(os.Getenv("APP_JWT_SECRET")),
+
+		LiveKitURL:       os.Getenv("LIVEKIT_URL"),
+		LiveKitAPIURL:    os.Getenv("LIVEKIT_API_URL"),
+		LiveKitAPIKey:    os.Getenv("LIVEKIT_API_KEY"),
+		LiveKitAPISecret: os.Getenv("LIVEKIT_API_SECRET"),
 	}
 	var err error
 	if cfg.AccessTTL, err = envDuration("APP_ACCESS_TTL", 15*time.Minute); err != nil {
@@ -37,6 +52,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.TempRoomGrace, err = envDuration("APP_TEMP_ROOM_GRACE", 5*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.LiveKitTokenTTL, err = envDuration("LIVEKIT_TOKEN_TTL", 10*time.Minute); err != nil {
 		return Config{}, err
 	}
 	if cfg.TrustProxy, err = envBool("APP_TRUST_PROXY", false); err != nil {
@@ -50,6 +68,12 @@ func Load() (Config, error) {
 func (c Config) ValidateServe() error {
 	if len(c.JWTSecret) < 32 {
 		return errors.New("APP_JWT_SECRET must be set and at least 32 bytes long")
+	}
+	if c.LiveKitURL == "" || c.LiveKitAPIKey == "" || c.LiveKitAPISecret == "" {
+		return errors.New("LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set")
+	}
+	if !strings.HasPrefix(c.LiveKitURL, "ws://") && !strings.HasPrefix(c.LiveKitURL, "wss://") {
+		return errors.New("LIVEKIT_URL must start with ws:// or wss://")
 	}
 	return nil
 }

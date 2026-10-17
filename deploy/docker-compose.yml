@@ -1,0 +1,15 @@
+# Local development: runs LiveKit only. Run the backend on the host with
+# `go run ./cmd/server` (see backend/.env.example for the matching LIVEKIT_* values).
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.10
+    command: --config /etc/livekit.yaml
+    ports:
+      - "7880:7880" # HTTP API + WebSocket signaling
+      - "7881:7881" # WebRTC over TCP (fallback when UDP is blocked)
+      - "50000-50100:50000-50100/udp" # WebRTC over UDP
+    volumes:
+      - ./livekit.dev.yaml:/etc/livekit.yaml:ro
+    extra_hosts:
+      # Lets LiveKit reach the backend running on the host (webhooks).
+      - "host.docker.internal:host-gateway"

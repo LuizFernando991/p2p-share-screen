@@ -26,14 +26,21 @@ var (
 	errModifySelf   = apperr.Forbidden("cannot_modify_self", "you cannot demote, disable or delete your own account")
 )
 
+// MediaSessions ends a user's live media connections (implemented by
+// rooms.Service). Calls are best effort.
+type MediaSessions interface {
+	DisconnectUser(ctx context.Context, userID string, closeOwned bool)
+}
+
 type Service struct {
 	store  *store.Store
 	hasher *auth.PasswordHasher
+	media  MediaSessions // nil: no media server (CLI)
 	now    func() time.Time
 }
 
-func NewService(st *store.Store, hasher *auth.PasswordHasher) *Service {
-	return &Service{store: st, hasher: hasher, now: time.Now}
+func NewService(st *store.Store, hasher *auth.PasswordHasher, media MediaSessions) *Service {
+	return &Service{store: st, hasher: hasher, media: media, now: time.Now}
 }
 
 type CreateInput struct {
@@ -114,7 +121,7 @@ type UpdateInput struct {
 }
 
 // Update applies in to the user. Disabling the account or resetting its
-// password ends all of the user's sessions.
+// password ends all of the user's sessions, including live media.
 func (s *Service) Update(ctx context.Context, actorID, userID string, in UpdateInput) (store.User, error) {
 	if actorID == userID &&
 		((in.Role != nil && *in.Role != store.RoleAdmin) || (in.Disabled != nil && *in.Disabled)) {
@@ -134,7 +141,10 @@ func (s *Service) Update(ctx context.Context, actorID, userID string, in UpdateI
 		}
 	}
 
-	var updated store.User
+	var (
+		updated     store.User
+		endSessions bool
+	)
 	err := s.store.WithTx(ctx, func(q *store.Queries) error {
 		u, err := q.GetUserByID(ctx, userID)
 		if errors.Is(err, store.ErrNotFound) {
@@ -143,7 +153,6 @@ func (s *Service) Update(ctx context.Context, actorID, userID string, in UpdateI
 		if err != nil {
 			return err
 		}
-		endSessions := false
 		if in.DisplayName != nil {
 			if u.DisplayName, err = normalizeDisplayName(*in.DisplayName, u.Username); err != nil {
 				return err
@@ -172,12 +181,23 @@ func (s *Service) Update(ctx context.Context, actorID, userID string, in UpdateI
 		updated = u
 		return nil
 	})
-	return updated, err
+	if err != nil {
+		return store.User{}, err
+	}
+	if endSessions && s.media != nil {
+		s.media.DisconnectUser(ctx, userID, false)
+	}
+	return updated, nil
 }
 
+// Delete removes the user. Rooms they own are deleted with them.
 func (s *Service) Delete(ctx context.Context, actorID, userID string) error {
 	if actorID == userID {
 		return errModifySelf
+	}
+	if s.media != nil {
+		// Must run first: deleting the user drops their memberships.
+		s.media.DisconnectUser(ctx, userID, true)
 	}
 	err := s.store.DeleteUser(ctx, userID)
 	if errors.Is(err, store.ErrNotFound) {

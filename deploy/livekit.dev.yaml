@@ -1,0 +1,17 @@
+# LiveKit config for local development only. Never reuse these keys in
+# production.
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50100
+  use_external_ip: false
+  node_ip: 127.0.0.1
+keys:
+  devkey: dev-secret-change-me-dev-secret-change-me
+webhook:
+  api_key: devkey
+  urls:
+    - http://host.docker.internal:8080/api/livekit/webhook
+logging:
+  level: info

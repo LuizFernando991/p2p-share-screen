@@ -16,6 +16,8 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode"
@@ -57,12 +59,31 @@ var (
 
 type Service struct {
 	store      *store.Store
+	media      Media
+	log        *slog.Logger
 	emptyGrace time.Duration
 	now        func() time.Time
 }
 
-func NewService(st *store.Store, emptyGrace time.Duration) *Service {
-	return &Service{store: st, emptyGrace: emptyGrace, now: time.Now}
+// NewService builds the service. Media calls made after a database change
+// are best effort: failures are logged, since the change already happened.
+func NewService(st *store.Store, media Media, emptyGrace time.Duration, log *slog.Logger) *Service {
+	return &Service{store: st, media: media, log: log, emptyGrace: emptyGrace, now: time.Now}
+}
+
+// View is a room listing plus its live activity.
+type View struct {
+	store.RoomListing
+	// Live is nil when the media server could not be reached.
+	Live *Activity
+}
+
+// JoinInfo is what a client needs to connect to a room's media.
+type JoinInfo struct {
+	Room       store.RoomListing
+	URL        string
+	Token      string
+	CanPublish bool
 }
 
 // CanManage reports whether actor may change the room and its members.
@@ -83,11 +104,68 @@ func FormatCode(code string) string {
 	return code[:4] + "-" + code[4:]
 }
 
-func (s *Service) List(ctx context.Context, actor store.User) ([]store.RoomListing, error) {
-	return s.store.ListRooms(ctx, actor.ID, actor.Role == store.RoleAdmin)
+func (s *Service) List(ctx context.Context, actor store.User) ([]View, error) {
+	list, err := s.store.ListRooms(ctx, actor.ID, actor.Role == store.RoleAdmin)
+	if err != nil {
+		return nil, err
+	}
+	return s.withActivity(ctx, list), nil
 }
 
-func (s *Service) Get(ctx context.Context, actor store.User, roomID string) (store.RoomListing, error) {
+func (s *Service) Get(ctx context.Context, actor store.User, roomID string) (View, error) {
+	l, err := s.listing(ctx, actor, roomID)
+	if err != nil {
+		return View{}, err
+	}
+	return s.withActivity(ctx, []store.RoomListing{l})[0], nil
+}
+
+// Join authorizes actor to connect to the room's media and returns a token
+// whose permissions match the actor's role in the room.
+func (s *Service) Join(ctx context.Context, actor store.User, roomID string) (JoinInfo, error) {
+	l, err := s.listing(ctx, actor, roomID)
+	if err != nil {
+		return JoinInfo{}, err
+	}
+	if l.Type == store.RoomPrivate {
+		// Restart the grace period so the room is not deleted between issuing
+		// the token and the client connecting.
+		if err := s.store.TouchRoomEmptySince(ctx, roomID, s.now()); err != nil {
+			return JoinInfo{}, err
+		}
+	}
+	canPublish := CanPublish(actor, l)
+	token, err := s.media.JoinToken(roomID, actor.ID, actor.DisplayName, canPublish)
+	if err != nil {
+		return JoinInfo{}, fmt.Errorf("issue media token: %w", err)
+	}
+	return JoinInfo{Room: l, URL: s.media.URL(), Token: token, CanPublish: canPublish}, nil
+}
+
+func (s *Service) withActivity(ctx context.Context, list []store.RoomListing) []View {
+	views := make([]View, len(list))
+	if len(list) == 0 {
+		return views
+	}
+	ids := make([]string, len(list))
+	for i, l := range list {
+		ids[i] = l.ID
+	}
+	active, err := s.media.ListActive(ctx, ids)
+	if err != nil {
+		s.log.WarnContext(ctx, "list live rooms", "err", err)
+	}
+	for i, l := range list {
+		views[i].RoomListing = l
+		if err == nil {
+			a := active[l.ID]
+			views[i].Live = &a
+		}
+	}
+	return views
+}
+
+func (s *Service) listing(ctx context.Context, actor store.User, roomID string) (store.RoomListing, error) {
 	l, err := s.store.GetRoomListing(ctx, roomID, actor.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		return store.RoomListing{}, errRoomNotFound
@@ -159,13 +237,19 @@ func (s *Service) Update(ctx context.Context, actor store.User, roomID string, i
 	return s.store.GetRoomListing(ctx, roomID, actor.ID)
 }
 
+// Delete removes the room and disconnects everyone in it.
 func (s *Service) Delete(ctx context.Context, actor store.User, roomID string) error {
-	return s.store.WithTx(ctx, func(q *store.Queries) error {
+	err := s.store.WithTx(ctx, func(q *store.Queries) error {
 		if _, err := authorize(ctx, q, actor, roomID, true); err != nil {
 			return err
 		}
 		return q.DeleteRoom(ctx, roomID)
 	})
+	if err != nil {
+		return err
+	}
+	s.bestEffort(ctx, "delete media room", s.media.DeleteRoom(ctx, roomID), "room_id", roomID)
+	return nil
 }
 
 // RegenerateCode replaces a private room's join code. Current members keep
@@ -262,7 +346,8 @@ func (s *Service) AddMember(ctx context.Context, actor store.User, roomID, userI
 	return out, err
 }
 
-// SetCanPublish changes whether a member may share their screen.
+// SetCanPublish changes whether a member may share their screen. Revoking it
+// stops a share in progress.
 func (s *Service) SetCanPublish(ctx context.Context, actor store.User, roomID, userID string, canPublish bool) (store.MemberListing, error) {
 	var out store.MemberListing
 	err := s.store.WithTx(ctx, func(q *store.Queries) error {
@@ -290,13 +375,18 @@ func (s *Service) SetCanPublish(ctx context.Context, actor store.User, roomID, u
 		out = memberListing(m, u)
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return store.MemberListing{}, err
+	}
+	s.bestEffort(ctx, "update media permissions", s.media.SetCanPublish(ctx, roomID, userID, canPublish),
+		"room_id", roomID, "user_id", userID)
+	return out, nil
 }
 
-// RemoveMember removes userID from the room. Members may remove themselves
-// (leave); removing others requires managing the room.
+// RemoveMember removes userID from the room and disconnects them. Members
+// may remove themselves (leave); removing others requires managing the room.
 func (s *Service) RemoveMember(ctx context.Context, actor store.User, roomID, userID string) error {
-	return s.store.WithTx(ctx, func(q *store.Queries) error {
+	err := s.store.WithTx(ctx, func(q *store.Queries) error {
 		room, err := authorize(ctx, q, actor, roomID, actor.ID != userID)
 		if err != nil {
 			return err
@@ -316,6 +406,12 @@ func (s *Service) RemoveMember(ctx context.Context, actor store.User, roomID, us
 		}
 		return q.DeleteRoomMember(ctx, roomID, userID)
 	})
+	if err != nil {
+		return err
+	}
+	s.bestEffort(ctx, "remove media participant", s.media.RemoveParticipant(ctx, roomID, userID),
+		"room_id", roomID, "user_id", userID)
+	return nil
 }
 
 // TransferOwnership makes another member the owner of a restricted room.
@@ -369,9 +465,81 @@ func (s *Service) TransferOwnership(ctx context.Context, actor store.User, roomI
 }
 
 // DeleteExpiredTemporary deletes private rooms that have been empty longer
-// than the grace period and returns their ids.
+// than the grace period and returns their ids. Webhooks can be lost or
+// arrive out of order, so each candidate is checked against the media
+// server first; nothing is deleted if it cannot be reached.
 func (s *Service) DeleteExpiredTemporary(ctx context.Context) ([]string, error) {
-	return s.store.DeleteEmptyPrivateRooms(ctx, s.now().Add(-s.emptyGrace))
+	cutoff := s.now().Add(-s.emptyGrace)
+	ids, err := s.store.ListEmptyPrivateRooms(ctx, cutoff)
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	active, err := s.media.ListActive(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("check live rooms: %w", err)
+	}
+	var deleted []string
+	for _, roomID := range ids {
+		if active[roomID].Participants > 0 {
+			// Occupied after all: the join webhook was missed.
+			if err := s.store.SetRoomEmptySince(ctx, roomID, nil); err != nil && !errors.Is(err, store.ErrNotFound) {
+				return deleted, err
+			}
+			continue
+		}
+		ok, err := s.store.DeletePrivateRoomIfEmptySince(ctx, roomID, cutoff)
+		if err != nil {
+			return deleted, err
+		}
+		if ok {
+			deleted = append(deleted, roomID)
+			s.bestEffort(ctx, "delete media room", s.media.DeleteRoom(ctx, roomID), "room_id", roomID)
+		}
+	}
+	return deleted, nil
+}
+
+// HandleMediaEvent keeps rooms.empty_since in sync with the media server.
+func (s *Service) HandleMediaEvent(ctx context.Context, ev MediaEvent) error {
+	var err error
+	switch ev.Kind {
+	case MediaRoomOccupied:
+		err = s.store.SetRoomEmptySince(ctx, ev.RoomID, nil)
+	case MediaRoomEmpty:
+		now := s.now()
+		err = s.store.SetRoomEmptySince(ctx, ev.RoomID, &now)
+	default:
+		return nil
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return nil // room was deleted meanwhile
+	}
+	return err
+}
+
+// DisconnectUser kicks the user out of the media of every room they are a
+// member of. With closeOwned, rooms they own are closed for everyone (used
+// before deleting the user, which deletes those rooms).
+func (s *Service) DisconnectUser(ctx context.Context, userID string, closeOwned bool) {
+	list, err := s.store.ListRooms(ctx, userID, false)
+	if err != nil {
+		s.log.ErrorContext(ctx, "list rooms to disconnect user", "err", err, "user_id", userID)
+		return
+	}
+	for _, l := range list {
+		if closeOwned && l.OwnerID == userID {
+			s.bestEffort(ctx, "delete media room", s.media.DeleteRoom(ctx, l.ID), "room_id", l.ID)
+			continue
+		}
+		s.bestEffort(ctx, "remove media participant", s.media.RemoveParticipant(ctx, l.ID, userID),
+			"room_id", l.ID, "user_id", userID)
+	}
+}
+
+func (s *Service) bestEffort(ctx context.Context, what string, err error, attrs ...any) {
+	if err != nil {
+		s.log.WarnContext(ctx, what, append(attrs, "err", err)...)
+	}
 }
 
 // authorize loads the room and checks that actor may view it, or manage it

@@ -14,7 +14,15 @@ type roomOwnerDTO struct {
 	DisplayName string `json:"display_name"`
 }
 
+type liveDTO struct {
+	Participants int `json:"participants"`
+	Publishers   int `json:"publishers"`
+}
+
 type roomDTO struct {
+	// Live is null when the media server could not be reached; only set on
+	// list and get.
+	Live        *liveDTO       `json:"live,omitempty"`
 	ID          string         `json:"id"`
 	Name        string         `json:"name"`
 	Type        store.RoomType `json:"type"`
@@ -47,6 +55,20 @@ func toRoomDTO(actor store.User, l store.RoomListing) roomDTO {
 		dto.JoinCode = rooms.FormatCode(l.JoinCode)
 	}
 	return dto
+}
+
+func toRoomViewDTO(actor store.User, v rooms.View) roomDTO {
+	dto := toRoomDTO(actor, v.RoomListing)
+	if v.Live != nil {
+		dto.Live = &liveDTO{Participants: v.Live.Participants, Publishers: v.Live.Publishers}
+	}
+	return dto
+}
+
+type joinTokenResponse struct {
+	LiveKitURL string  `json:"livekit_url"`
+	Token      string  `json:"token"`
+	Room       roomDTO `json:"room"`
 }
 
 type memberDTO struct {
@@ -105,7 +127,7 @@ func (s *Server) handleListRooms(w http.ResponseWriter, r *http.Request, actor s
 	}
 	out := make([]roomDTO, 0, len(list))
 	for _, l := range list {
-		out = append(out, toRoomDTO(actor, l))
+		out = append(out, toRoomViewDTO(actor, l))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rooms": out})
 }
@@ -130,7 +152,7 @@ func (s *Server) handleGetRoom(w http.ResponseWriter, r *http.Request, actor sto
 		s.writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toRoomDTO(actor, l))
+	writeJSON(w, http.StatusOK, toRoomViewDTO(actor, l))
 }
 
 func (s *Server) handleUpdateRoom(w http.ResponseWriter, r *http.Request, actor store.User) {
@@ -240,6 +262,34 @@ func (s *Server) handleUpdateMember(w http.ResponseWriter, r *http.Request, acto
 
 func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request, actor store.User) {
 	if err := s.rooms.RemoveMember(r.Context(), actor, r.PathValue("id"), r.PathValue("uid")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleJoinToken(w http.ResponseWriter, r *http.Request, actor store.User) {
+	info, err := s.rooms.Join(r.Context(), actor, r.PathValue("id"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, joinTokenResponse{
+		LiveKitURL: info.URL,
+		Token:      info.Token,
+		Room:       toRoomDTO(actor, info.Room),
+	})
+}
+
+func (s *Server) handleLiveKitWebhook(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	ev, err := s.webhooks.ReceiveWebhook(r)
+	if err != nil {
+		s.log.WarnContext(r.Context(), "rejected livekit webhook", "err", err, "ip", s.clientIP(r))
+		s.writeError(w, r, errInvalidWebhook)
+		return
+	}
+	if err := s.rooms.HandleMediaEvent(r.Context(), ev); err != nil {
 		s.writeError(w, r, err)
 		return
 	}

@@ -16,6 +16,7 @@ var (
 	errMissingToken    = apperr.Unauthorized("missing_token", "missing bearer token")
 	errAdminOnly       = apperr.Forbidden("admin_only", "this action requires an admin")
 	errTooManyRequests = apperr.TooManyRequests("too_many_requests", "too many attempts, try again later")
+	errInvalidWebhook  = apperr.Unauthorized("invalid_webhook", "webhook signature is invalid")
 )
 
 // authedHandler is a handler that runs only for an authenticated user.

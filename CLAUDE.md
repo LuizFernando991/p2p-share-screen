@@ -32,7 +32,7 @@ backend/            # Go: API REST
     auth/           # hash de senha, JWT de acesso, refresh tokens, middleware
     users/          # CRUD de usuários (somente admin)
     rooms/          # salas, membros, códigos de convite, TODAS as regras de acesso a sala
-    livekit/        # emissão de token LiveKit, webhook, chamadas à API do LiveKit
+    livekit/        # implementa rooms.Media: token LiveKit, webhook, RoomService API
     httpapi/        # roteamento, handlers, erros, JSON
     store/          # acesso ao SQLite: todo SQL do projeto fica aqui
     config/         # config via variáveis de ambiente
@@ -41,7 +41,7 @@ backend/            # Go: API REST
     testutil/       # helpers de teste (banco temporário)
   migrations/       # migrations SQL (goose), embutidas no binário
 desktop/            # Tauri v2 + React + TS (vem depois do backend)
-deploy/             # docker-compose (backend + LiveKit), livekit.yaml
+deploy/             # docker-compose.yml + livekit.dev.yaml (LiveKit local de dev); produção: pendente
 ```
 
 ## Stack do backend
@@ -83,19 +83,24 @@ Qualquer usuário logado pode criar uma sala e vira o **dono**. Há dois tipos:
 - Numa sala fixa, os membros entram e transmitem a qualquer hora, mesmo com o dono offline.
 - Só o dono (ou o admin) adiciona/remove membros, muda `can_publish`, renomeia, apaga e regenera o código. Um membro pode sair por conta própria (`DELETE /members/{seu id}`).
 - Entrar com código válido adiciona o usuário como membro (ele volta sem o código). Regenerar o código não remove quem já entrou. O código só aparece na resposta para o dono e o admin.
-- Sala temporária: a coluna `rooms.empty_since` marca desde quando ela está vazia (começa preenchida na criação). Na fase 3, os webhooks do LiveKit limpam essa coluna quando alguém entra e a preenchem quando o último sai. A rotina `cleanupLoop` (a cada 1 min) apaga as que passaram do prazo.
+- Sala temporária: a coluna `rooms.empty_since` marca desde quando ela está vazia (começa preenchida na criação). Os webhooks do LiveKit limpam essa coluna quando alguém entra e a preenchem quando a sala fecha (ver "Fluxo para entrar e transmitir"). A rotina `cleanupLoop` (a cada 1 min) apaga as que passaram do prazo.
 - Apagar um usuário apaga as salas de que ele é dono (cascade).
 - O admin enxerga e gerencia qualquer sala.
 - Código de convite: 8 caracteres de um alfabeto de 32 símbolos sem `0/1/I/O`, exibido como `K7QF-2MXP`, gerado com `crypto/rand`. A entrada aceita minúsculas, com ou sem hífen. Tentativas têm rate limit por usuário.
 - Para o dono achar quem adicionar, `GET /api/users?q=` busca usuários ativos (só id, username e nome).
 - O nome da sala no LiveKit é o `id` da sala no nosso banco.
 
-### Fluxo para entrar e transmitir
-1. Cliente: `POST /api/rooms/{id}/join-token`.
-2. Backend checa: usuário ativo, é membro (ou dono, ou admin) → gera token LiveKit com `roomJoin`, `canSubscribe=true`, `canPublish=can_publish`, `canPublishSources=[screen_share, screen_share_audio]`, identity = user id, name = nome de exibição, TTL curto.
-3. Cliente conecta no LiveKit e publica/assina as faixas.
-4. O webhook do LiveKit (`POST /api/livekit/webhook`, com assinatura verificada) informa quem está transmitindo, para a listagem de salas mostrar "ao vivo".
-5. Quando alguém é removido da sala ou desativado, o backend chama `RemoveParticipant` na API do LiveKit para derrubar a conexão.
+### Fluxo para entrar e transmitir (LiveKit)
+`internal/rooms` define a interface `Media`; `internal/livekit` a implementa (tokens, RoomService via Twirp, webhooks). Testes de `rooms` usam um `fakeMedia`; os de `httpapi` usam o cliente real apontando para uma porta fechada.
+
+1. Cliente: `POST /api/rooms/{id}/join-token` → `{livekit_url, token, room}`.
+2. Backend checa acesso (membro, dono ou admin) e gera um token LiveKit: `roomJoin` na sala `id`, `canSubscribe=true`, `canPublish` conforme `rooms.CanPublish`, `canPublishSources=[screen_share, screen_share_audio]` (**sem câmera/microfone**), `canPublishData=true`, identity = user id, name = nome de exibição, TTL `LIVEKIT_TOKEN_TTL` (padrão 10 min; depois de conectado, o LiveKit renova o token sozinho). Em sala temporária, pedir token também reinicia o prazo do `empty_since`.
+3. Cliente conecta direto no LiveKit e publica/assina as faixas.
+4. `GET /api/rooms` e `GET /api/rooms/{id}` trazem `live: {participants, publishers}` consultando o `ListRooms` do LiveKit (uma chamada para a lista toda). Se o LiveKit estiver fora, o campo `live` não aparece e o resto funciona.
+5. Webhook `POST /api/livekit/webhook`: a assinatura JWT e o sha256 do corpo são verificados. `room_started`/`participant_joined` limpam o `empty_since`; `room_finished` (o LiveKit fecha a sala ~20 s depois que o último sai) o preenche.
+6. A limpeza de salas temporárias confere no LiveKit antes de apagar: se ainda há alguém conectado (webhook perdido ou fora de ordem), ela só limpa o `empty_since`. Se o LiveKit não responde, não apaga nada.
+7. Derrubar conexões (best effort, depois do commit; falha vira log WARN): remover membro → `RemoveParticipant`; tirar `can_publish` → `UpdateParticipant` (encerra a transmissão em curso); apagar sala → `DeleteRoom`; desativar usuário ou resetar senha → `RemoveParticipant` em todas as salas em que ele é membro; apagar usuário → `DeleteRoom` nas salas dele e `RemoveParticipant` nas demais.
+- Limitações conhecidas: identity = user id, então o mesmo usuário em dois aparelhos derruba a primeira conexão. Um admin conectado numa sala da qual não é membro não é derrubado ao ser desativado.
 
 ## API (rascunho)
 
@@ -141,7 +146,7 @@ Erros sempre no formato `{"error": {"code": "room_not_found", "message": "..."}}
 - Identificadores, código e mensagens de commit em inglês; documentação e conversa em português.
 - IDs são UUIDv7 (ordenáveis), salvos como TEXT. Datas em UTC, RFC 3339.
 - Toda checagem de permissão fica em `internal/rooms` (ou `auth`), nunca espalhada nos handlers. Handler fino: decodifica, chama o serviço, serializa.
-- Config só por variáveis de ambiente (`APP_ADDR`, `APP_DB_PATH`, `APP_JWT_SECRET`, `APP_ACCESS_TTL`, `APP_REFRESH_TTL`, `APP_TRUST_PROXY`, `APP_TEMP_ROOM_GRACE`; na fase 3, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`). Segredos nunca entram no repo; `backend/.env.example` documenta as variáveis.
+- Config só por variáveis de ambiente (`APP_ADDR`, `APP_DB_PATH`, `APP_JWT_SECRET`, `APP_ACCESS_TTL`, `APP_REFRESH_TTL`, `APP_TRUST_PROXY`, `APP_TEMP_ROOM_GRACE`, `LIVEKIT_URL` (ws/wss, obrigatório), `LIVEKIT_API_URL` (opcional), `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_TOKEN_TTL`). Segredos nunca entram no repo; `backend/.env.example` documenta as variáveis.
 - Serviços retornam `*apperr.Error` para erros esperados (o código vira o `error.code` da resposta); qualquer outro erro vira 500 genérico e é logado. Erros de `store` (`ErrNotFound`, `ErrConflict`) são traduzidos para `apperr` no serviço.
 - Testes usam `auth.FastPasswordParams` (argon2 barato) e `testutil.OpenStore` (banco em diretório temporário).
 - `context.Context` em toda função que faz I/O.
@@ -155,8 +160,14 @@ cd backend && go run ./cmd/server admin create --username admin             # pe
 cd backend && go test -race ./...
 cd backend && go vet ./... && gofmt -l .
 
-# infra local
-docker compose -f deploy/docker-compose.yml up  # LiveKit (modo dev)
+# infra local: LiveKit v1.13.10 em :7880, webhooks para o backend em host.docker.internal:8080
+docker compose -f deploy/docker-compose.yml up -d
+# backend apontando para ele (valores de backend/.env.example)
+cd backend && APP_JWT_SECRET=$(openssl rand -base64 48) LIVEKIT_URL=ws://localhost:7880 \
+  LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=dev-secret-change-me-dev-secret-change-me go run ./cmd/server
+# participante de teste (sem app): entra na sala <room-id> e dispara os webhooks
+docker run --rm --network host livekit/livekit-cli room join --url ws://127.0.0.1:7880 \
+  --api-key devkey --api-secret dev-secret-change-me-dev-secret-change-me --identity tester <room-id>
 ```
 
 ## Desktop (fase 2) e riscos conhecidos
@@ -176,7 +187,8 @@ docker compose -f deploy/docker-compose.yml up  # LiveKit (modo dev)
 
 1. ✅ Backend: config, SQLite + migrations, usuários, login/refresh, subcomando de admin, testes.
 2. ✅ Salas, membros, código de convite, transferência de posse, limpeza de salas temporárias, testes.
-3. Integração LiveKit: join-token, webhook (atualizar `empty_since`), remoção de participantes (ao remover membro, tirar `can_publish`, desativar usuário ou apagar sala), `DeleteRoom` no LiveKit quando a sala temporária expira; docker-compose com LiveKit.
+3. ✅ Integração LiveKit: join-token, webhook, `live` na listagem, derrubar conexões, limpeza verificada no LiveKit, docker-compose de dev.
+   - Pendente (quando o domínio estiver configurado): compose de produção na VPS (backend + LiveKit com TURN/TLS + proxy reverso com HTTPS, ex.: Caddy).
 4. Spike de captura de tela no Tauri (Windows e Linux).
 5. App desktop.
 
