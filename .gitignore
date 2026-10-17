@@ -1,0 +1,14 @@
+# secrets
+.env
+*.env.local
+
+# backend
+backend/data/
+*.db
+*.db-shm
+*.db-wal
+
+# desktop
+node_modules/
+dist/
+target/
