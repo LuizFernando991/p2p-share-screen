@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#111;color:#eee;font:14px sans-serif">
+<pre id="log" style="margin:8px"></pre>
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.22.3/dist/livekit-client.umd.js"></script>
+<script>
+const LK_URL = __URL__;
+const LK_TOKEN = __TOKEN__;
+const send = (kind, data) => window.ipc.postMessage(JSON.stringify({ kind, data }));
+const log = (m) => { document.getElementById('log').textContent += m + '\n'; send('log', m); };
+window.onerror = (msg) => send('error', String(msg));
+window.addEventListener('unhandledrejection', (e) => send('error', String(e.reason)));
+
+(async () => {
+  log('RTCPeerConnection: ' + typeof RTCPeerConnection + ', AudioContext: ' + typeof AudioContext);
+  if (typeof LivekitClient === 'undefined') throw new Error('livekit-client failed to load');
+  const { Room, RoomEvent, Track } = LivekitClient;
+  const room = new Room();
+  let pending = 2;
+  const done = () => { if (--pending === 0) send('done', ''); };
+
+  room.on(RoomEvent.TrackSubscribed, (track) => {
+    if (track.source === Track.Source.ScreenShare) {
+      const video = track.attach();
+      video.muted = true;
+      video.style.width = '100%';
+      document.body.appendChild(video);
+      setTimeout(() => {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        log(`video: ${video.videoWidth}x${video.videoHeight}, readyState ${video.readyState}`);
+        send('frame', canvas.toDataURL('image/png'));
+        done();
+      }, 4000);
+    } else if (track.source === Track.Source.ScreenShareAudio) {
+      // Analyse without playing it (playing would loop back into the capture).
+      const ctx = new AudioContext();
+      ctx.resume();
+      const source = ctx.createMediaStreamSource(new MediaStream([track.mediaStreamTrack]));
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 16384;
+      source.connect(analyser);
+      setTimeout(() => {
+        const bins = new Float32Array(analyser.frequencyBinCount);
+        analyser.getFloatFrequencyData(bins);
+        let peak = 1;
+        for (let i = 1; i < bins.length; i++) if (bins[i] > bins[peak]) peak = i;
+        const hz = (peak * ctx.sampleRate) / analyser.fftSize;
+        log(`audio: context ${ctx.state}, peak ${hz.toFixed(0)} Hz at ${bins[peak].toFixed(1)} dB`);
+        done();
+      }, 4000);
+    }
+  });
+
+  await room.connect(LK_URL, LK_TOKEN);
+  log('connected; remote participants: ' + room.remoteParticipants.size);
+})().catch((e) => send('error', String((e && e.stack) || e)));
+</script>
+</body>
+</html>

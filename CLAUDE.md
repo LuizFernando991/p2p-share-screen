@@ -176,14 +176,23 @@ docker run --rm --network host livekit/livekit-cli room join --url ws://127.0.0.
 - **Captura de tela (decidido): nativa no lado Rust do Tauri, não por `getDisplayMedia` do WebView.** O objetivo é capturar o monitor inteiro ou qualquer janela do SO de forma confiável nos dois sistemas. No Linux, o WebView do Tauri (WebKitGTK) não suporta isso bem.
   - **Capturador (decidido pelo spike):** o `DesktopCapturer` do próprio libwebrtc do LiveKit (`livekit::webrtc::desktop_capturer`), o mesmo do Chromium. Uma API para os dois sistemas: no Linux, `DesktopCaptureSourceType::Generic` abre o seletor do xdg-desktop-portal (PipeWire) no Wayland; no Windows, `Screen`/`Window` com `get_source_list()`. Sem crates extras de captura.
   - Os frames (BGRA, que a libyuv chama de "ARGB") viram I420 com `yuv_helper::argb_to_i420` e entram num `NativeVideoSource(is_screencast=true)`, publicado com `TrackSource::Screenshare`, VP8 e simulcast.
-  - Áudio do sistema (ainda não feito): o capturador do Chromium é só vídeo. Windows via WASAPI loopback; Linux via monitor do PipeWire/PulseAudio; publicar por `NativeAudioSource` com `TrackSource::ScreenshareAudio`.
+  - **Áudio do sistema:** o capturador do Chromium só cuida de vídeo. No Linux (feito no spike): gravar de `@DEFAULT_MONITOR@` pela API simples do PulseAudio (`libpulse-simple-binding`; o pipewire-pulse atende), 48 kHz estéreo, em frames de 10 ms, num `NativeAudioSource` com AEC/NS/AGC **desligados**, publicado como `TrackSource::ScreenshareAudio` com `dtx: false`. No Windows: WASAPI loopback (ainda não escrito).
+  - Cuidado: o monitor captura **tudo** o que toca no computador, inclusive o áudio de outra sala que a pessoa esteja assistindo no próprio app (vira eco para quem assiste). Resolver no app: não tocar o áudio recebido enquanto a pessoa transmite, ou excluir o stream do próprio app da captura.
   - A UI controla a captura por comandos Tauri (`list_sources`, `start_share`, `stop_share`) e recebe o estado por eventos.
-- **Assistir (a validar):** a primeira opção é `livekit-client` no WebView (o WebKitGTK precisa de `enable-webrtc` ligado e dos plugins GStreamer `bad`/`nice`). Se falhar no Linux, assinar pelo SDK Rust (`NativeVideoStream`) e entregar os frames para a UI.
+- **Assistir: `livekit-client` no WebView NÃO funciona no Linux.** O WebKitGTK do Ubuntu 24.04 (2.52) é compilado sem o backend GStreamer WebRTC: o `RTCPeerConnection` fica `undefined` mesmo com `enable-webrtc` ligado. No Windows, o WebView2 (Chromium) tem WebRTC. A forma de assistir no Linux está em decisão (ver o fim do spike).
 
 ### Spike (fase 4): `desktop/spike/`
-Binário com `share` (captura + publica) e `watch` (assina + salva PNG). Os dois fazem login no backend e pegam o token em `join-token`. Configuração por env: `SPIKE_API`, `SPIKE_USER`, `SPIKE_PASSWORD`, `SPIKE_ROOM`, `SPIKE_OUT`, `SPIKE_SOURCE`.
-- ✅ Linux/Wayland (Pop!_OS 24.04, COSMIC): o seletor do portal abriu, a captura saiu em 1920x1080 a 30 fps, e o `watch` recebeu o frame pelo LiveKit com a tela correta. A listagem mostrou `live {participants: 2, publishers: 1}`.
-- ⏳ Windows: não testado (precisa de uma máquina Windows). ⏳ Linux/X11: não testado. ⏳ Áudio: não feito. ⏳ Assistir no WebView: não testado.
+Subcomandos:
+- `share`: captura tela e áudio e publica;
+- `watch`: assina, salva um frame em PNG e mede o áudio;
+- `view`: o mesmo que `watch`, mas dentro de um WebView `wry` com `livekit-client` 2.22.3;
+- `tone`: gera um WAV de 440 Hz.
+
+Todos fazem login no backend e pegam o token em `join-token`. Configuração por env: `SPIKE_API`, `SPIKE_USER`, `SPIKE_PASSWORD`, `SPIKE_ROOM`, `SPIKE_OUT`, `SPIKE_SOURCE`, `SPIKE_AUDIO`.
+- ✅ Vídeo no Linux/Wayland (Pop!_OS 24.04, COSMIC): o seletor do portal abriu, a captura saiu em 1920x1080 a 30 fps, e o `watch` recebeu o frame pelo LiveKit com a tela correta. A listagem mostrou `live {participants: 2, publishers: 1}`.
+- ✅ Áudio no Linux: com um tom de 440 Hz tocando, 82% da potência recebida estava em 440 Hz (Goertzel); sem o tom, 0%.
+- ❌ Assistir no WebKitGTK: sem WebRTC (ver acima).
+- ⏳ Windows (captura, áudio WASAPI, WebView2): não testado, precisa de uma máquina Windows. ⏳ Linux/X11: não testado.
 
 ### Requisitos de build (só para quem compila: dev e CI; o usuário final não precisa de nada disso)
 - **clang ≥ 21**: o libwebrtc do `webrtc-sys` vem compilado com a libc++ do Chromium e o build recusa um clang mais antigo. No Ubuntu 24.04, instalar pelo apt.llvm.org (`sudo ./llvm.sh 21`). `desktop/spike/.cargo/config.toml` aponta `CC`/`CXX` para o `clang-21`.
@@ -199,7 +208,7 @@ Binário com `share` (captura + publica) e `watch` (assina + salva PNG). Os dois
 2. ✅ Salas, membros, código de convite, transferência de posse, limpeza de salas temporárias, testes.
 3. ✅ Integração LiveKit: join-token, webhook, `live` na listagem, derrubar conexões, limpeza verificada no LiveKit, docker-compose de dev.
    - Pendente (quando o domínio estiver configurado): compose de produção na VPS (backend + LiveKit com TURN/TLS + proxy reverso com HTTPS, ex.: Caddy).
-4. 🔶 Spike de captura: ✅ vídeo no Linux/Wayland; pendentes: áudio do sistema, Windows, X11, assistir no WebView.
+4. 🔶 Spike de captura: ✅ vídeo e áudio no Linux/Wayland; ❌ assistir no WebKitGTK; pendentes: decidir como assistir no Linux, Windows e X11.
 5. App desktop.
 
 ## Decisões de produto
