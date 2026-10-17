@@ -77,6 +77,13 @@ export interface ScreenSource {
 
 export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE'
 
+/** What the renderer tells the tray about the current call. */
+export interface MediaState {
+  /** Name of the connected room, or null when not in a call. */
+  room: string | null
+  sharing: boolean
+}
+
 /** The API the preload script exposes to the renderer as `window.api`. */
 export interface DesktopApi {
   platform: string
@@ -97,6 +104,12 @@ export interface DesktopApi {
   }
   /** Authenticated call to the backend. Paths start with /api/ (auth endpoints excluded). */
   request<T>(method: HttpMethod, path: string, body?: unknown): Promise<Result<T>>
+  tray: {
+    /** Keeps the tray icon and menu in sync with the call. */
+    setState(state: MediaState): void
+    /** Called when "Stop sharing" is chosen in the tray. Returns an unsubscribe function. */
+    onStopShare(callback: () => void): () => void
+  }
   screen: {
     /** Screens and windows with thumbnails (Windows/macOS; on Linux the system picker is used). */
     listSources(): Promise<ScreenSource[]>

@@ -1,0 +1,59 @@
+appId: com.sharescreen.app
+productName: ShareScreen
+copyright: Copyright © 2026 Luiz Fernando
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - resources/**
+  - package.json
+# No update server yet: skip auto-update metadata.
+publish: null
+
+asarUnpack:
+  # Real file paths for tray/notification icons and the native venmic addon.
+  - resources/**
+  - node_modules/@vencord/venmic/**
+
+linux:
+  # Also names the .desktop file (sharescreen.desktop), which must match
+  # package.json "desktopName" so the window's Wayland app_id finds its icon.
+  executableName: sharescreen
+  icon: build/icons
+  category: Network
+  synopsis: Compartilhamento de tela em salas
+  description: Compartilhe a tela em salas com a sua equipe.
+  target:
+    - deb
+    - AppImage
+  artifactName: ShareScreen-${version}-${arch}.${ext}
+  desktop:
+    entry:
+      Name: ShareScreen
+      GenericName: Compartilhamento de tela
+      Comment: Compartilhe a tela em salas
+      StartupWMClass: sharescreen
+      Categories: Network;VideoConference;
+      Keywords: screen;share;tela;compartilhar;
+
+deb:
+  packageName: sharescreen
+  artifactName: sharescreen_${version}_${arch}.${ext}
+  priority: optional
+  # System audio capture (venmic) links libpipewire; without it only that feature is off.
+  recommends:
+    - libpipewire-0.3-0t64 | libpipewire-0.3-0
+  # TODO: package.json "homepage" is a placeholder until the domain is set up.
+
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+
+nsis:
+  oneClick: true
+  perMachine: false
+  shortcutName: ShareScreen
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

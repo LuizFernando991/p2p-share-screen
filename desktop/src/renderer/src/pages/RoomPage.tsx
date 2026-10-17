@@ -89,7 +89,7 @@ export function RoomPage({
               onError={(err) => setError(err.message)}
               className="lk-room"
             >
-              <Stage canPublish={join.room.can_publish} />
+              <Stage roomName={join.room.name} canPublish={join.room.can_publish} />
               <RoomAudioRenderer />
             </LiveKitRoom>
           ) : (

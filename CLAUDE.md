@@ -185,6 +185,10 @@ docker run --rm --network host livekit/livekit-cli room join --url ws://127.0.0.
 - **Áudio do sistema:**
   - Linux: `@vencord/venmic` (MPL-2.0, o mesmo do Vesktop) cria um microfone virtual no PipeWire com o áudio de todos os apps **exceto o nosso** (sem eco de outras salas). O renderer captura esse dispositivo com `getUserMedia` (AEC/NS/AGC desligados) e publica como `ScreenShareAudio`.
   - Windows: `audio: 'loopback'` no handler de display media. A verificar: excluir o áudio do próprio app.
+- **Bandeja (Windows e Linux):** `Tray` do Electron, menu enxuto. Durante a transmissão: "Parar de compartilhar", "Mostrar/Ocultar janela" e "Sair"; fora dela, só "Mostrar/Ocultar" e "Sair". Quem indica a transmissão é o próprio ícone: glifo monocromático (claro em painel escuro, escuro em painel claro, pelo `nativeTheme`) com um ponto vermelho ao transmitir. Bandejas do Linux (StatusNotifier) não entregam clique no ícone; no Windows o clique alterna a janela.
+  - O renderer manda `{ room, sharing }` (`window.api.tray.setState`) e o main pede para parar via IPC `tray:stop-share` (`window.api.tray.onStopShare`). O `stop()` sempre reenvia o estado no fim, para a bandeja nunca ficar dessincronizada.
+  - Fechar a janela esconde o app na bandeja (avisa uma vez, por notificação). Uma instância por perfil: abrir de novo traz a janela de volta (`requestSingleInstanceLock`).
+  - Testável sem mexer na tela: o menu é exportado via dbusmenu; dá para ler (`GetLayout`) e clicar (`Event ... clicked`) com `busctl --user` no item `org.freedesktop.StatusNotifierItem-<pid>-1`.
 - **Assistir (estilo Discord):** o vídeo fica na janela principal: grade com as telas ao vivo da sala, clique para focar, tela cheia. Usar `adaptiveStream`/`dynacast` do `livekit-client` para que miniaturas peçam camadas baixas e só a tela em foco venha em alta.
 - **Publicação de tela:** `setScreenShareEnabled` com `contentHint: 'detail'`, 1080p30 e camadas de simulcast `h360fps3` e `h720fps15`. O áudio do sistema no Linux é publicado à parte (`publishTrack`, `ScreenShareAudio`, estéreo, `musicHighQualityStereo`, sem DTX/RED). Quando a transmissão para (inclusive pelo sistema), o áudio é derrubado junto (`LocalTrackUnpublished`).
 
@@ -195,6 +199,8 @@ src/main/index.ts          # janela, IPC, permissões, perfis de dev
 src/main/backend.ts        # cliente do backend (tokens, refresh serializado)
 src/main/settings.ts       # servidor + refresh token (safeStorage) em userData
 src/main/screen.ts         # display media handler, seletor (Windows), venmic (Linux)
+src/main/tray.ts           # ícone e menu da bandeja (estado da chamada, ações)
+resources/                 # ícones em runtime (janela, bandeja normal/ao vivo); fonte em build/icon.svg
 src/preload/index.ts       # contextBridge → window.api
 src/renderer/src/          # React: App, pages/ (Login, Shell, RoomPage, AdminPage),
                            # components/ (Stage, MembersPanel, Dialogs, SourcePicker), lib/api.ts
@@ -204,17 +210,27 @@ e2e/two-users.mjs          # E2E com duas instâncias (Playwright + Electron)
 ### Comandos e armadilhas
 ```bash
 cd desktop && npm install
-npm run dev                                   # app com hot reload (backend + LiveKit rodando)
+npm run dist:linux                            # release/: sharescreen_<v>_amd64.deb e ShareScreen-<v>-x86_64.AppImage
+npm run dist:win                              # instalador NSIS (gerar no Windows ou com wine)
+npm run dev                                   # hot reload da UI; main/preload reiniciam o app (--watch)
 npm run typecheck && npm run build
 SHARESCREEN_PROFILE=b npm run dev             # segunda instância/usuário (userData separado)
 SHARESCREEN_SERVER=https://... npm run dev    # servidor padrão da tela de login
 E2E_ADMIN=admin:senha E2E_VIEWER=viewer:senha E2E_OUT=/tmp/shots node e2e/two-users.mjs
 ```
+- **`npm run build`/`dist:*` apagam `out/`, que o `npm run dev` usa:** pare o dev antes de empacotar.
 - **O terminal do VS Code exporta `ELECTRON_RUN_AS_NODE=1`**, que faz o Electron rodar como Node puro (sem janela; `electron --version` mostra a versão do Node). Rode com `env -u ELECTRON_RUN_AS_NODE npm run dev`. O script E2E já remove a variável.
 - O `@vencord/venmic` é dependência opcional e nativa: precisa ficar em `external` no `electron.vite.config.ts`. Empacotado, ele não acha o binário. Exporta via CommonJS, então o `PatchBay` pode vir em `default` no `import()`.
 - No E2E com duas instâncias na mesma máquina, a B fica muda: senão a A captura o áudio que a B toca (são processos diferentes, o venmic só exclui o da própria instância).
 - **Verificado (Linux/Wayland, COSMIC), via E2E:** login, criar sala, adicionar membro, compartilhar (seletor do portal), assistir na outra instância (vídeo 1280x720 pela camada adaptativa) e o áudio do sistema pelo venmic (com o tom de 440 Hz tocando, o pico recebido foi para 439 Hz).
 - **Pendente:** testar no Windows (seletor próprio, `loopback` e se o áudio do próprio app entra na captura), empacotamento (`electron-builder`: deb, AppImage, NSIS, ícones) e ajustes de codec/qualidade.
+
+### Ícones e empacotamento
+- Fonte: `build/icon.svg` (gradiente Mauve → Blue + glifo do monitor), `build/icon-small-glyph.svg` (glifo simplificado para 16/24 px) e `build/tray-*.svg` (bandeja monocromática). O ImageMagick 6 não renderiza gradiente de SVG, então os PNGs do app são compostos em camadas (gradiente + máscara arredondada + glifo). Saídas: `build/icons/NxN.png` (16 a 1024, Linux), `build/icon.ico` (Windows), `build/icon.png` e `resources/icon.png` (janela).
+- Identidade: `package.json` `desktopName: sharescreen.desktop` dá à janela o app_id `sharescreen` no Wayland. O compositor acha o ícone pelo `.desktop` de mesmo nome (o electron-builder gera `sharescreen.desktop` a partir de `linux.executableName`). No Windows, `app.setAppUserModelId('com.sharescreen.app')` (= `appId`) liga a barra de tarefas ao atalho e ao `.ico`.
+- `electron-builder.yml`: deb (pacote `sharescreen`, recomenda `libpipewire-0.3-0t64 \| libpipewire-0.3-0` por causa do venmic), AppImage, NSIS por usuário. `resources/**` e o venmic ficam fora do asar (caminhos reais para ícones de bandeja/notificação e o addon nativo). `publish: null` até existir servidor de atualização. **`homepage` no package.json é provisório** (`sharescreen.example.com`), trocar quando o domínio existir.
+- Libs da UI (React, LiveKit, Lucide) ficam em `devDependencies`: o Vite as empacota no bundle, e assim o instalador não leva cópias no `node_modules`.
+- Verificado: o app empacotado (`release/linux-unpacked`) abre, registra a bandeja e carrega o venmic.
 
 ### Histórico do spike (Tauri, removido; ver commits até `833d4e9`)
 - O WebKitGTK 2.52 do Ubuntu 24.04 vem **sem backend WebRTC** (`RTCPeerConnection` indefinido), então o `livekit-client` não roda no WebView do Tauri no Linux.

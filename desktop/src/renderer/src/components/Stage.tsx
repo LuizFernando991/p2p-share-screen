@@ -31,7 +31,7 @@ async function findSystemAudioDevice(): Promise<MediaDeviceInfo> {
 }
 
 /** The screens being shared in the room, Discord-style, plus the share controls. */
-export function Stage({ canPublish }: { canPublish: boolean }) {
+export function Stage({ roomName, canPublish }: { roomName: string; canPublish: boolean }) {
   const room = useRoomContext()
   const participants = useParticipants()
   const { localParticipant, isScreenShareEnabled } = useLocalParticipant()
@@ -139,7 +139,18 @@ export function Stage({ canPublish }: { canPublish: boolean }) {
     await stopSystemAudio()
     await localParticipant.setScreenShareEnabled(false)
     setBusy(false)
+    // Re-sync the tray even if React state did not change (e.g. it was stale).
+    window.api.tray.setState({ room: roomName, sharing: false })
   }
+
+  // Keep the tray icon/menu in sync; back to idle when leaving the call.
+  useEffect(() => {
+    window.api.tray.setState({ room: roomName, sharing: isScreenShareEnabled })
+  }, [roomName, isScreenShareEnabled])
+  useEffect(() => () => window.api.tray.setState({ room: null, sharing: false }), [])
+
+  // "Parar de compartilhar" in the tray menu.
+  useEffect(() => window.api.tray.onStopShare(() => void stop()))
 
   function fullscreen(el: HTMLElement | null) {
     void el?.requestFullscreen()

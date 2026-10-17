@@ -20,6 +20,14 @@ const api: DesktopApi = {
     setServer: (url) => ipcRenderer.invoke('settings:set-server', url)
   },
   request: (method, path, body) => ipcRenderer.invoke('api:request', method, path, body),
+  tray: {
+    setState: (state) => ipcRenderer.send('tray:state', state),
+    onStopShare: (callback) => {
+      const listener = (): void => callback()
+      ipcRenderer.on('tray:stop-share', listener)
+      return () => ipcRenderer.removeListener('tray:stop-share', listener)
+    }
+  },
   screen: {
     listSources: () => ipcRenderer.invoke('screen:list-sources'),
     select: (sourceId, audio) => ipcRenderer.invoke('screen:select', sourceId, audio),

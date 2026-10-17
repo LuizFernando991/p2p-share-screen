@@ -3,27 +3,28 @@
   "productName": "ShareScreen",
   "version": "0.1.0",
   "description": "Compartilhamento de tela em salas",
+  "author": {
+    "name": "Luiz Fernando",
+    "email": "lfernando.r991@gmail.com"
+  },
+  "homepage": "https://sharescreen.example.com",
   "private": true,
   "main": "./out/main/index.js",
+  "desktopName": "sharescreen.desktop",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "electron-vite dev --watch",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "preview": "electron-vite preview",
     "dist:linux": "electron-vite build && electron-builder --linux",
     "dist:win": "electron-vite build && electron-builder --win"
   },
-  "dependencies": {
-    "@livekit/components-react": "2.9.24",
-    "livekit-client": "2.22.3",
-    "lucide-react": "1.51.0",
-    "react": "19.3.0",
-    "react-dom": "19.3.0"
-  },
+  "dependencies": {},
   "optionalDependencies": {
     "@vencord/venmic": "7.2.3"
   },
   "devDependencies": {
+    "@livekit/components-react": "2.9.24",
     "@types/node": "26.6.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
@@ -31,7 +32,11 @@
     "electron": "43.7.7",
     "electron-builder": "26.17.0",
     "electron-vite": "5.0.0",
+    "livekit-client": "2.22.3",
+    "lucide-react": "1.51.0",
     "playwright-core": "1.63.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "typescript": "6.0.3",
     "vite": "7.3.7"
   }

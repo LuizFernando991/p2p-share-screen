@@ -7,6 +7,8 @@ interface SettingsFile {
   server?: string
   /** Refresh token encrypted with safeStorage, base64. */
   refreshToken?: string
+  /** The "still running in the tray" notice was shown once. */
+  trayHintShown?: boolean
 }
 
 /**
@@ -33,6 +35,15 @@ export class Settings {
 
   set server(value: string | undefined) {
     this.data.server = value
+    this.save()
+  }
+
+  get trayHintShown(): boolean {
+    return this.data.trayHintShown ?? false
+  }
+
+  set trayHintShown(value: boolean) {
+    this.data.trayHintShown = value
     this.save()
   }
 

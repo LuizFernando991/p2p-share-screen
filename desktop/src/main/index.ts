@@ -1,11 +1,12 @@
 import { join } from 'node:path'
 
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, Notification, session, shell } from 'electron'
 
-import type { HttpMethod } from '../shared/api'
+import type { HttpMethod, MediaState } from '../shared/api'
 import { Backend } from './backend'
 import { listSources, registerDisplayMediaHandler, selectSource, startSystemAudio, stopSystemAudio } from './screen'
 import { Settings } from './settings'
+import { AppTray, resource } from './tray'
 
 const DEFAULT_SERVER = process.env.SHARESCREEN_SERVER ?? 'http://localhost:8080'
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PATCH', 'DELETE']
@@ -16,7 +17,18 @@ if (process.env.SHARESCREEN_PROFILE) {
   app.setPath('userData', join(app.getPath('appData'), `ShareScreen-${process.env.SHARESCREEN_PROFILE}`))
 }
 
-function createWindow(): void {
+let mainWindow: BrowserWindow | null = null
+let quitting = false
+
+const tray = new AppTray(
+  () => mainWindow,
+  () => {
+    quitting = true
+    app.quit()
+  }
+)
+
+function createWindow(settings: Settings): void {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -24,6 +36,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     title: 'ShareScreen',
+    icon: resource('icon.png'),
     backgroundColor: '#24273a',
     autoHideMenuBar: true,
     webPreferences: {
@@ -33,7 +46,29 @@ function createWindow(): void {
       nodeIntegration: false
     }
   })
+  mainWindow = win
   win.once('ready-to-show', () => win.show())
+  win.on('show', () => tray.refresh())
+  win.on('hide', () => tray.refresh())
+
+  // Closing hides to the tray (calls and shares keep running); quit from the tray menu.
+  win.on('close', (event) => {
+    if (quitting) return
+    event.preventDefault()
+    win.hide()
+    if (!settings.trayHintShown && Notification.isSupported()) {
+      settings.trayHintShown = true
+      new Notification({
+        title: 'O ShareScreen continua aberto',
+        body: 'Ele fica na bandeja do sistema. Use o ícone para voltar, controlar o compartilhamento ou sair.',
+        icon: resource('icon.png')
+      }).show()
+    }
+  })
+  win.on('closed', () => {
+    mainWindow = null
+  })
+
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://')) void shell.openExternal(url)
     return { action: 'deny' }
@@ -65,26 +100,45 @@ function registerIpc(backend: Backend): void {
   )
   ipcMain.handle('screen:start-system-audio', () => startSystemAudio())
   ipcMain.handle('screen:stop-system-audio', () => stopSystemAudio())
+  ipcMain.on('tray:state', (_e, state: MediaState) => {
+    tray.setState({ room: typeof state?.room === 'string' ? state.room : null, sharing: Boolean(state?.sharing) })
+  })
 }
 
-app.whenReady().then(() => {
-  const settings = new Settings()
-  const backend = new Backend(settings, DEFAULT_SERVER, () => {
-    for (const win of BrowserWindow.getAllWindows()) win.webContents.send('auth:expired')
-  })
-  registerIpc(backend)
+// Windows: ties the taskbar/Start menu entry to the installed shortcut and its icon.
+if (process.platform === 'win32') app.setAppUserModelId('com.sharescreen.app')
 
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
-    callback(ALLOWED_PERMISSIONS.includes(permission))
-  )
-  // Lets enumerateDevices return labels (needed to find the system audio device).
-  session.defaultSession.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.includes(permission))
-  registerDisplayMediaHandler(session.defaultSession)
+// One instance per profile: opening the app again brings the hidden window back.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => tray.showWindow())
 
-  createWindow()
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  app.whenReady().then(() => {
+    const settings = new Settings()
+    const backend = new Backend(settings, DEFAULT_SERVER, () => {
+      for (const win of BrowserWindow.getAllWindows()) win.webContents.send('auth:expired')
+    })
+    registerIpc(backend)
+
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
+      callback(ALLOWED_PERMISSIONS.includes(permission))
+    )
+    // Lets enumerateDevices return labels (needed to find the system audio device).
+    session.defaultSession.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.includes(permission))
+    registerDisplayMediaHandler(session.defaultSession)
+
+    createWindow(settings)
+    tray.create()
+    app.on('activate', () => {
+      if (mainWindow) tray.showWindow()
+      else createWindow(settings)
+    })
   })
+}
+
+app.on('before-quit', () => {
+  quitting = true
 })
 
 app.on('window-all-closed', () => {

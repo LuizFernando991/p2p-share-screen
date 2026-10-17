@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Simplified glyph for 16/24 px icons: thicker strokes, no monitor stand. -->
+  <g transform="translate(96 96) scale(5)" fill="none" stroke="#181926" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="4" y="8" width="56" height="44" rx="6"/>
+    <path d="M32 43V20M22 30l10-10 10 10"/>
+  </g>
+</svg>
