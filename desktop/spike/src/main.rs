@@ -5,8 +5,8 @@
 //!                       the system audio, and publish both
 //!   spike watch         subscribe to the screen share in the room: save a video
 //!                       frame as PNG and report the received audio level/pitch
-//!   spike view          like watch, but inside a WebView (WebKitGTK/WebView2)
-//!                       running livekit-client, as the Tauri UI would
+//!   spike view          watch inside an app-like window: native receive, frames
+//!                       served to a WebView over frames:// and drawn with WebGL
 //!   spike tone <file>   write a 440 Hz test tone WAV
 //!
 //! Configuration via env: SPIKE_API (default http://localhost:8080), SPIKE_USER,
