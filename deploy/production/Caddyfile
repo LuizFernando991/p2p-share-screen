@@ -1,0 +1,8 @@
+# HTTPS certificates are issued automatically (Let's Encrypt) for both domains.
+{$API_DOMAIN} {
+	reverse_proxy backend:8080
+}
+
+{$LIVEKIT_DOMAIN} {
+	reverse_proxy host.docker.internal:7880
+}

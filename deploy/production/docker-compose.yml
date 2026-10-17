@@ -1,0 +1,78 @@
+# Production stack for a VPS with a public IP: Caddy (HTTPS) + backend + LiveKit.
+# Needs two DNS records pointing to the VPS (API_DOMAIN and LIVEKIT_DOMAIN) and
+# the firewall ports listed in the README. Configure .env (see .env.example).
+#
+#   docker compose up -d --build
+#   docker compose run --rm backend admin create --username admin
+
+name: sharescreen
+
+services:
+  caddy:
+    image: caddy:2.10
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in .env}
+      LIVEKIT_DOMAIN: ${LIVEKIT_DOMAIN:?set LIVEKIT_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  backend:
+    build:
+      context: ../../backend
+      args:
+        VERSION: ${SHARESCREEN_VERSION:-0.0.1}
+    restart: unless-stopped
+    environment:
+      APP_JWT_SECRET: ${APP_JWT_SECRET:?set APP_JWT_SECRET in .env}
+      APP_TRUST_PROXY: "true"
+      LIVEKIT_URL: wss://${LIVEKIT_DOMAIN}
+      LIVEKIT_API_URL: http://host.docker.internal:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-sharescreen}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}
+    volumes:
+      - backend_data:/data
+    # Published on localhost only: LiveKit (host network) posts webhooks here.
+    ports:
+      - "127.0.0.1:8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  livekit:
+    image: livekit/livekit-server:v1.13.10
+    restart: unless-stopped
+    # Host networking: WebRTC uses a wide UDP port range.
+    network_mode: host
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        bind_addresses: ["0.0.0.0"]
+        rtc:
+          tcp_port: 7881
+          port_range_start: 50000
+          port_range_end: 60000
+          use_external_ip: true
+        turn:
+          enabled: true
+          domain: ${LIVEKIT_DOMAIN}
+          udp_port: 3478
+        keys:
+          ${LIVEKIT_API_KEY:-sharescreen}: ${LIVEKIT_API_SECRET}
+        webhook:
+          api_key: ${LIVEKIT_API_KEY:-sharescreen}
+          urls:
+            - http://127.0.0.1:8080/api/livekit/webhook
+        logging:
+          level: info
+
+volumes:
+  backend_data:
+  caddy_data:
+  caddy_config:

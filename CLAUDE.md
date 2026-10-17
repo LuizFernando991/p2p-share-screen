@@ -41,7 +41,7 @@ backend/            # Go: API REST
     testutil/       # helpers de teste (banco temporário)
   migrations/       # migrations SQL (goose), embutidas no binário
 desktop/            # Electron + React + TS (main / preload / renderer)
-deploy/             # docker-compose.yml + livekit.dev.yaml (LiveKit local de dev); produção: pendente
+deploy/             # docker-compose.yml + livekit.dev.yaml (LiveKit local de dev); production/ = kit da VPS
 ```
 
 ## Stack do backend
@@ -159,6 +159,7 @@ cd backend && APP_JWT_SECRET=$(openssl rand -base64 48) go run ./cmd/server   # 
 cd backend && go run ./cmd/server admin create --username admin             # pede a senha; ou: echo "senha" | ...
 cd backend && go test -race ./...
 cd backend && go vet ./... && gofmt -l .
+cd backend && go build -ldflags "-X main.version=0.0.1" ./cmd/server   # versão no binário (`server version`)
 
 # infra local: LiveKit v1.13.10 em :7880, webhooks para o backend em host.docker.internal:8080
 docker compose -f deploy/docker-compose.yml up -d
@@ -242,7 +243,7 @@ E2E_ADMIN=admin:senha E2E_VIEWER=viewer:senha E2E_OUT=/tmp/shots node e2e/two-us
 1. ✅ Backend: config, SQLite + migrations, usuários, login/refresh, subcomando de admin, testes.
 2. ✅ Salas, membros, código de convite, transferência de posse, limpeza de salas temporárias, testes.
 3. ✅ Integração LiveKit: join-token, webhook, `live` na listagem, derrubar conexões, limpeza verificada no LiveKit, docker-compose de dev.
-   - Pendente (quando o domínio estiver configurado): compose de produção na VPS (backend + LiveKit com TURN/TLS + proxy reverso com HTTPS, ex.: Caddy).
+   - Kit de produção em `deploy/production/` (Caddy com HTTPS automático + backend + LiveKit em rede do host, configurado via `LIVEKIT_CONFIG`; o backend recebe os webhooks em `127.0.0.1:8080`). Validado localmente (imagem, config), ainda não numa VPS real. O TURN usa UDP 3478 e o relay UDP 30000–40000; sem TURN/TLS por enquanto.
 4. ✅ Spike de captura (Tauri): concluído. Levou à troca para Electron.
 5. 🔶 App desktop (Electron): ✅ esqueleto, auth via main, salas, membros, sala com compartilhar/assistir (estilo Discord), áudio do sistema no Linux, admin de usuários; pendentes: Windows, empacotamento, polimento.
 

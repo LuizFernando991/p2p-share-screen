@@ -2,6 +2,7 @@
 //
 //	server [serve]                                     start the HTTP API
 //	server admin create --username X [--display-name Y]  create an admin
+//	server version                                       print the version
 package main
 
 import (
@@ -30,9 +31,13 @@ import (
 	"p2p-share-screen/backend/internal/users"
 )
 
+// version is set at build time: -ldflags "-X main.version=0.0.1".
+var version = "dev"
+
 const usage = `usage:
   server [serve]
-  server admin create --username NAME [--display-name NAME]`
+  server admin create --username NAME [--display-name NAME]
+  server version`
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -43,6 +48,10 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, logger *slog.Logger) error {
+	if len(args) == 1 && args[0] == "version" {
+		fmt.Println(version)
+		return nil
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -108,7 +117,7 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
-	logger.Info("listening", "addr", cfg.Addr)
+	logger.Info("listening", "addr", cfg.Addr, "version", version)
 
 	select {
 	case err := <-errCh:

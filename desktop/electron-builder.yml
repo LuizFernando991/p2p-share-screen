@@ -52,6 +52,7 @@ win:
     - nsis
 
 nsis:
+  artifactName: ShareScreen-Setup-${version}.${ext}
   oneClick: true
   perMachine: false
   shortcutName: ShareScreen
