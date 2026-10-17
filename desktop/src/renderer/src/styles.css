@@ -868,15 +868,9 @@ table.users .actions {
 }
 
 /* Menu */
-.menu {
-  position: relative;
-}
-
 .menu-list {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 4px);
-  z-index: 20;
+  position: fixed;
+  z-index: 40;
   min-width: 250px;
   background: var(--bg-deep);
   border: 1px solid var(--border);

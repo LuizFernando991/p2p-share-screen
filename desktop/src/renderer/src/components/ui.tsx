@@ -4,10 +4,12 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode
 } from 'react'
+import { createPortal } from 'react-dom'
 
 import { errorMessage } from '../lib/api'
 import { Modal } from './Dialogs'
@@ -70,32 +72,84 @@ export interface MenuItem {
   onSelect: () => void
 }
 
-/** A "⋯"-style dropdown anchored to its trigger. Closes on outside click or Escape. */
+const MENU_GAP = 4
+const VIEWPORT_MARGIN = 8
+
+/**
+ * A "⋯"-style dropdown. The list is portaled to <body> with fixed
+ * positioning, so scrolling/overflow containers (like the members panel)
+ * cannot clip it. It aligns to the trigger's right edge, flips above when
+ * there is no room below, and closes on outside click, Escape, scroll or
+ * resize.
+ */
 export function Menu({ trigger, label, items }: { trigger: ReactNode; label: string; items: MenuItem[] }) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current || !listRef.current) return
+    const anchor = triggerRef.current.getBoundingClientRect()
+    const list = listRef.current.getBoundingClientRect()
+    const below = anchor.bottom + MENU_GAP
+    const top =
+      below + list.height > window.innerHeight - VIEWPORT_MARGIN ? anchor.top - MENU_GAP - list.height : below
+    const left = Math.min(
+      Math.max(anchor.right - list.width, VIEWPORT_MARGIN),
+      window.innerWidth - list.width - VIEWPORT_MARGIN
+    )
+    setPosition({ top: Math.max(top, VIEWPORT_MARGIN), left })
+  }, [open])
 
   useEffect(() => {
     if (!open) return
+    const close = () => setOpen(false)
     const onPointer = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      if (!triggerRef.current?.contains(target) && !listRef.current?.contains(target)) close()
     }
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close()
     document.addEventListener('pointerdown', onPointer)
     document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', close)
+    // Capture: scrolling any ancestor would leave the fixed list behind.
+    window.addEventListener('scroll', close, true)
     return () => {
       document.removeEventListener('pointerdown', onPointer)
       document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('scroll', close, true)
     }
   }, [open])
 
+  function toggle() {
+    setPosition(null)
+    setOpen(!open)
+  }
+
   return (
-    <div className="menu" ref={ref}>
-      <button className="icon" aria-label={label} title={label} aria-expanded={open} onClick={() => setOpen(!open)}>
+    <>
+      <button
+        ref={triggerRef}
+        className={`icon ${open ? 'active' : ''}`}
+        aria-label={label}
+        title={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={toggle}
+      >
         {trigger}
       </button>
-      {open && (
-        <div className="menu-list" role="menu">
+      {open &&
+        createPortal(
+          <div
+            ref={listRef}
+            className="menu-list"
+            role="menu"
+            // Measured first while hidden, then placed (no flash at 0,0).
+            style={position ? { top: position.top, left: position.left } : { visibility: 'hidden' }}
+          >
           {items.map((item) => (
             <button
               key={item.label}
@@ -111,9 +165,10 @@ export function Menu({ trigger, label, items }: { trigger: ReactNode; label: str
               {item.checked !== undefined && <span className="menu-check">{item.checked && <Check size={14} />}</span>}
             </button>
           ))}
-        </div>
-      )}
-    </div>
+          </div>,
+          document.body
+        )}
+    </>
   )
 }
 
