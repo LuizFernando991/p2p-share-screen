@@ -77,12 +77,19 @@ async function getPatchBay(): Promise<PatchBay | null> {
  * Linux: links the audio of every app except ours into venmic's virtual
  * microphone, so viewers do not hear other rooms we are watching.
  */
-export async function startSystemAudio(): Promise<boolean> {
+export async function startSystemAudio(excludedApps: string[]): Promise<boolean> {
   const bay = await getPatchBay()
   if (!bay) return false
   const ownAudio = app.getAppMetrics().find((m) => m.name === 'Audio Service')?.pid
+  const appExcludes: Record<string, string>[] = excludedApps.flatMap((name) => [
+    { 'application.name': name } as Record<string, string>,
+    { 'application.process.binary': name } as Record<string, string>
+  ])
   return bay.link({
-    exclude: ownAudio ? [{ 'application.process.id': String(ownAudio) }] : [],
+    exclude: [
+      ...appExcludes,
+      ...(ownAudio ? [{ 'application.process.id': String(ownAudio) }] : [])
+    ],
     ignore_devices: true,
     only_speakers: true,
     only_default_speakers: true

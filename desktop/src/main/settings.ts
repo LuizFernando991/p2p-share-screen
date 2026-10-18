@@ -9,6 +9,8 @@ interface SettingsFile {
   refreshToken?: string
   /** The "still running in the tray" notice was shown once. */
   trayHintShown?: boolean
+  /** PipeWire application names excluded from system-audio sharing. */
+  audioExcludedApps?: string[]
 }
 
 /**
@@ -44,6 +46,15 @@ export class Settings {
 
   set trayHintShown(value: boolean) {
     this.data.trayHintShown = value
+    this.save()
+  }
+
+  get audioExcludedApps(): string[] {
+    return this.data.audioExcludedApps ?? ['Discord', 'Discord PTB', 'Discord Canary', 'discord']
+  }
+
+  set audioExcludedApps(value: string[]) {
+    this.data.audioExcludedApps = value
     this.save()
   }
 

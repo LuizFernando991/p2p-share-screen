@@ -101,6 +101,8 @@ export interface DesktopApi {
     server(): Promise<string>
     /** Validates and saves the server URL; changing it ends the current session. */
     setServer(url: string): Promise<Result<string>>
+    audioExcludedApps(): Promise<string[]>
+    setAudioExcludedApps(apps: string[]): Promise<void>
   }
   /** Authenticated call to the backend. Paths start with /api/ (auth endpoints excluded). */
   request<T>(method: HttpMethod, path: string, body?: unknown): Promise<Result<T>>

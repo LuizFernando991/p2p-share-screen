@@ -151,6 +151,12 @@ export function SettingsDialog({ server, onClose }: { server: string; onClose: (
   const [next, setNext] = useState('')
   const [error, setError] = useState('')
   const [done, setDone] = useState(false)
+  const [audioApps, setAudioApps] = useState('')
+  const [audioDone, setAudioDone] = useState(false)
+
+  useEffect(() => {
+    void window.api.settings.audioExcludedApps().then((apps) => setAudioApps(apps.join('\n')))
+  }, [])
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -181,6 +187,40 @@ export function SettingsDialog({ server, onClose }: { server: string; onClose: (
             {done && <p className="success">Senha alterada. As outras sessões da sua conta foram encerradas.</p>}
             <button className="primary">Trocar senha</button>
           </form>
+        </section>
+        <section className="settings-section">
+          <h3>Áudio compartilhado</h3>
+          <label>
+            Aplicativos que não devem ser compartilhados
+            <textarea
+              value={audioApps}
+              onChange={(e) => {
+                setAudioApps(e.target.value)
+                setAudioDone(false)
+              }}
+              rows={4}
+              placeholder="Discord\nDiscord PTB"
+            />
+          </label>
+          <p className="muted small">
+            Um nome por linha. No Linux, use o nome do aplicativo exibido pelo PipeWire. A alteração vale na próxima
+            transmissão.
+          </p>
+          <button
+            className="primary"
+            onClick={async () => {
+              await window.api.settings.setAudioExcludedApps(
+                audioApps
+                  .split('\n')
+                  .map((appName) => appName.trim())
+                  .filter(Boolean)
+              )
+              setAudioDone(true)
+            }}
+          >
+            Salvar áudio
+          </button>
+          {audioDone && <p className="success">Configuração de áudio salva.</p>}
         </section>
         <section className="settings-section">
           <h3>Servidor</h3>

@@ -17,7 +17,9 @@ const api: DesktopApi = {
   },
   settings: {
     server: () => ipcRenderer.invoke('settings:server'),
-    setServer: (url) => ipcRenderer.invoke('settings:set-server', url)
+    setServer: (url) => ipcRenderer.invoke('settings:set-server', url),
+    audioExcludedApps: () => ipcRenderer.invoke('settings:audio-excluded-apps'),
+    setAudioExcludedApps: (apps) => ipcRenderer.invoke('settings:set-audio-excluded-apps', apps)
   },
   request: (method, path, body) => ipcRenderer.invoke('api:request', method, path, body),
   tray: {

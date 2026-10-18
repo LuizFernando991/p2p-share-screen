@@ -77,13 +77,23 @@ function createWindow(settings: Settings): void {
   else void win.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
-function registerIpc(backend: Backend): void {
+function registerIpc(backend: Backend, settings: Settings): void {
   ipcMain.handle('auth:session', () => backend.restore())
   ipcMain.handle('auth:login', (_e, username: string, password: string) =>
     backend.login(String(username), String(password))
   )
   ipcMain.handle('settings:server', () => backend.configuredServer)
   ipcMain.handle('settings:set-server', (_e, url: string) => backend.setServer(String(url)))
+  ipcMain.handle('settings:audio-excluded-apps', () => settings.audioExcludedApps)
+  ipcMain.handle('settings:set-audio-excluded-apps', (_e, apps: unknown) => {
+    if (!Array.isArray(apps)) throw new Error('invalid audio app list')
+    settings.audioExcludedApps = apps
+      .filter((appName): appName is string => typeof appName === 'string')
+      .map((appName) => appName.trim())
+      .filter(Boolean)
+      .slice(0, 50)
+    return undefined
+  })
   ipcMain.handle('auth:logout', () => backend.logout())
   ipcMain.handle('auth:change-password', (_e, current: string, next: string) =>
     backend.changePassword(String(current), String(next))
@@ -98,7 +108,7 @@ function registerIpc(backend: Backend): void {
   ipcMain.handle('screen:select', (_e, sourceId: string | null, audio: boolean) =>
     selectSource(sourceId ? String(sourceId) : null, Boolean(audio))
   )
-  ipcMain.handle('screen:start-system-audio', () => startSystemAudio())
+  ipcMain.handle('screen:start-system-audio', () => startSystemAudio(settings.audioExcludedApps))
   ipcMain.handle('screen:stop-system-audio', () => stopSystemAudio())
   ipcMain.on('tray:state', (_e, state: MediaState) => {
     tray.setState({ room: typeof state?.room === 'string' ? state.room : null, sharing: Boolean(state?.sharing) })
@@ -119,7 +129,7 @@ if (!app.requestSingleInstanceLock()) {
     const backend = new Backend(settings, DEFAULT_SERVER, () => {
       for (const win of BrowserWindow.getAllWindows()) win.webContents.send('auth:expired')
     })
-    registerIpc(backend)
+    registerIpc(backend, settings)
 
     session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
       callback(ALLOWED_PERMISSIONS.includes(permission))
