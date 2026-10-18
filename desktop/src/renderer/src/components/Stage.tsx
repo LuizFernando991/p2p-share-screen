@@ -1,4 +1,5 @@
 import {
+  AudioTrack,
   useLocalParticipant,
   useParticipants,
   useRoomContext,
@@ -6,17 +7,48 @@ import {
   VideoTrack,
   type TrackReference
 } from '@livekit/components-react'
-import { AudioPresets, RoomEvent, ScreenSharePresets, Track, type LocalTrackPublication } from 'livekit-client'
-import { Maximize2, MonitorOff, MonitorUp, PhoneOff, Volume2, VolumeX } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import {
+  AudioPresets,
+  RoomEvent,
+  Track,
+  VideoQuality,
+  type LocalTrackPublication,
+  type RemoteTrackPublication
+} from 'livekit-client'
+import {
+  Activity,
+  AudioLines,
+  AudioLinesOff,
+  Eye,
+  LayoutGrid,
+  Maximize2,
+  MonitorOff,
+  MonitorUp,
+  PhoneOff,
+  Volume1,
+  Volume2,
+  VolumeX
+} from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 
 import { SYSTEM_AUDIO_DEVICE_LABEL } from '../../../shared/api'
+import { publishTestPattern, screenCapture, screenPublish, SHARE_MODES, type ShareMode } from '../lib/share'
+import { limitationLabel, statsSampler, type InboundStats, type OutboundStats, type TrackStats } from '../lib/stats'
 import { SourcePicker } from './SourcePicker'
 
 const isLinux = window.api.platform === 'linux'
+const SHARE_MODE_KEY = 'shareMode'
 
 function trackKey(t: TrackReference): string {
   return `${t.participant.identity}:${t.publication.trackSid}`
+}
+
+function loadShareMode(): ShareMode {
+  try {
+    return localStorage.getItem(SHARE_MODE_KEY) === 'sharp' ? 'sharp' : 'smooth'
+  } catch {
+    return 'smooth'
+  }
 }
 
 /** Waits for venmic's virtual microphone to show up as an input device. */
@@ -30,7 +62,41 @@ async function findSystemAudioDevice(): Promise<MediaDeviceInfo> {
   throw new Error('O dispositivo de áudio do sistema não apareceu.')
 }
 
-/** The screens being shared in the room, Discord-style, plus the share controls. */
+/** Polls a track's WebRTC stats once a second while enabled. */
+function useTrackStats(
+  track: { getRTCStatsReport(): Promise<RTCStatsReport | undefined> } | undefined,
+  enabled: boolean
+): TrackStats | null {
+  const [stats, setStats] = useState<TrackStats | null>(null)
+  useEffect(() => {
+    if (!enabled || !track) {
+      setStats(null)
+      return
+    }
+    const sample = statsSampler(track)
+    let alive = true
+    const tick = async () => {
+      const s = await sample().catch(() => null)
+      if (alive) setStats(s)
+    }
+    void tick()
+    const timer = setInterval(tick, 1000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [track, enabled])
+  return stats
+}
+
+const mbps = (kbps: number) => (kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${Math.round(kbps)} kbps`)
+
+/**
+ * The screens being shared in the room, Discord-style. The viewer picks one
+ * screen to watch: it gets the high simulcast layer and is the only one whose
+ * audio plays (other screens' audio is unsubscribed). The rest are thumbnails
+ * on the low layer.
+ */
 export function Stage({
   roomName,
   canPublish,
@@ -52,16 +118,65 @@ export function Stage({
   const screens = useTracks([Track.Source.ScreenShare], { onlySubscribed: false }).filter(
     (t): t is TrackReference => t.publication !== undefined
   )
-  const [focus, setFocus] = useState<string | null>(null)
+  const screenAudio = useTracks([Track.Source.ScreenShareAudio], { onlySubscribed: false }).filter(
+    (t): t is TrackReference => t.publication !== undefined
+  )
+  // Watching is by participant (stable), not track sid (changes on re-share).
+  const [watching, setWatching] = useState<string | null>(null)
+  const [gridChosen, setGridChosen] = useState(false)
+  const [showStats, setShowStats] = useState(false)
   const [withAudio, setWithAudio] = useState(true)
+  const [shareMode, setShareMode] = useState<ShareMode>(loadShareMode)
   const [picking, setPicking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const systemAudio = useRef<MediaStreamTrack | null>(null)
   const systemAudioCleanup = useRef<(() => void) | null>(null)
+  const controlsRef = useRef<HTMLDivElement>(null)
+  useFitLevels(controlsRef)
 
-  const focused = screens.find((t) => trackKey(t) === focus) ?? (screens.length === 1 ? screens[0] : undefined)
-  const others = focused ? screens.filter((t) => t !== focused) : screens
+  const watched =
+    screens.find((t) => t.participant.identity === watching) ??
+    (!gridChosen && screens.length === 1 ? screens[0] : undefined)
+  const watchedId = watched?.participant.identity ?? null
+  const others = watched ? screens.filter((t) => t !== watched) : screens
+  const hasAudio = (identity: string) => screenAudio.some((t) => t.participant.identity === identity)
+  const watchedAudio = screenAudio.find(
+    (t) => !t.participant.isLocal && t.participant.identity === watchedId && t.publication.track
+  )
+
+  function watch(t: TrackReference) {
+    setWatching(t.participant.identity)
+    setGridChosen(false)
+  }
+
+  function backToGrid() {
+    setWatching(null)
+    setGridChosen(true)
+  }
+
+  // Watched screen: high layer + its audio subscribed; others: low layer, no audio.
+  const screensKey = screens.map(trackKey).join(',')
+  const audioKey = screenAudio.map(trackKey).join(',')
+  useEffect(() => {
+    for (const t of screens) {
+      if (t.participant.isLocal) continue
+      ;(t.publication as RemoteTrackPublication).setVideoQuality(
+        t.participant.identity === watchedId ? VideoQuality.HIGH : VideoQuality.LOW
+      )
+    }
+    for (const t of screenAudio) {
+      if (t.participant.isLocal) continue
+      ;(t.publication as RemoteTrackPublication).setSubscribed(t.participant.identity === watchedId)
+    }
+    // screens/screenAudio are covered by their keys.
+  }, [screensKey, audioKey, watchedId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const outbound = useTrackStats(localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track, isScreenShareEnabled)
+  const inbound = useTrackStats(
+    watched && !watched.participant.isLocal ? watched.publication.track : undefined,
+    showStats
+  )
 
   async function stopSystemAudio() {
     const track = systemAudio.current
@@ -178,26 +293,14 @@ export function Stage({
     }
   }
 
+
   async function start(sourceId: string | null) {
     setPicking(false)
     setBusy(true)
     setError('')
     try {
       if (!isLinux) await window.api.screen.select(sourceId, withAudio)
-      await localParticipant.setScreenShareEnabled(
-        true,
-        {
-          audio: false,
-          contentHint: 'detail',
-          resolution: ScreenSharePresets.h1080fps30.resolution,
-          selfBrowserSurface: 'exclude'
-        },
-        {
-          screenShareEncoding: ScreenSharePresets.h1080fps30.encoding,
-          // Low layers let viewers watch thumbnails cheaply (adaptiveStream).
-          screenShareSimulcastLayers: [ScreenSharePresets.h360fps3, ScreenSharePresets.h720fps15]
-        }
-      )
+      await localParticipant.setScreenShareEnabled(true, screenCapture(shareMode), screenPublish(shareMode))
       if (withAudio) {
         try {
           await publishSystemAudio()
@@ -206,8 +309,9 @@ export function Stage({
         }
       }
     } catch (err) {
-      // NotAllowedError: the user cancelled the picker.
-      if (!(err instanceof DOMException && err.name === 'NotAllowedError')) {
+      // The user cancelled the picker: NotAllowedError (permission) or AbortError
+      // (Electron answers a cancelled request with no source).
+      if (!(err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'AbortError'))) {
         setError(err instanceof Error ? err.message : String(err))
       }
     } finally {
@@ -224,6 +328,15 @@ export function Stage({
     window.api.tray.setState({ room: roomName, sharing: false })
   }
 
+  function chooseShareMode(mode: ShareMode) {
+    setShareMode(mode)
+    try {
+      localStorage.setItem(SHARE_MODE_KEY, mode)
+    } catch {
+      // Preference only; ignore storage errors.
+    }
+  }
+
   // Keep the tray icon/menu in sync; back to idle when leaving the call.
   useEffect(() => {
     window.api.tray.setState({ room: roomName, sharing: isScreenShareEnabled })
@@ -233,9 +346,47 @@ export function Stage({
   // "Parar de compartilhar" in the tray menu.
   useEffect(() => window.api.tray.onStopShare(() => void stop()))
 
-  function fullscreen(el: HTMLElement | null) {
-    void el?.requestFullscreen()
-  }
+  // Dev-only diagnostics hook (window.__share): publish a test pattern and read stats.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const samplers = new Map<string, () => Promise<TrackStats | null>>()
+    let stopPattern: (() => void) | null = null
+    const sample = async (track: { sid?: string; getRTCStatsReport(): Promise<RTCStatsReport | undefined> } | undefined) => {
+      if (!track?.sid) return null
+      if (!samplers.has(track.sid)) samplers.set(track.sid, statsSampler(track))
+      return samplers.get(track.sid)!()
+    }
+    const hook = {
+      async testPattern(motion: boolean, toneHz?: number) {
+        stopPattern?.()
+        stopPattern = await publishTestPattern(localParticipant, motion, toneHz)
+      },
+      stopTestPattern() {
+        stopPattern?.()
+        stopPattern = null
+      },
+      audioSubscriptions() {
+        return [...room.remoteParticipants.values()].map((p) => ({
+          name: p.name || p.identity,
+          subscribed: p.getTrackPublication(Track.Source.ScreenShareAudio)?.isSubscribed ?? null
+        }))
+      },
+      async stats() {
+        const out: Record<string, TrackStats | null> = {
+          local: await sample(localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track)
+        }
+        for (const p of room.remoteParticipants.values()) {
+          out[p.name || p.identity] = await sample(p.getTrackPublication(Track.Source.ScreenShare)?.track)
+        }
+        return out
+      }
+    }
+    Object.assign(window, { __share: hook })
+    return () => {
+      stopPattern?.()
+      Reflect.deleteProperty(window, '__share')
+    }
+  }, [localParticipant, room])
 
   return (
     <div className="stage">
@@ -243,82 +394,119 @@ export function Stage({
         {screens.length === 0 ? (
           <div className="empty">
             <p className="muted">Ninguém está compartilhando a tela.</p>
-            {canPublish && <p className="muted small">Use “Compartilhar tela” para começar.</p>}
+            {canPublish && <p className="muted small">Use “Compartilhar” para começar.</p>}
           </div>
-        ) : focused ? (
-          <div className="focus-layout">
-            <ScreenTile track={focused} big onFullscreen={fullscreen} onClick={() => setFocus(null)} />
+        ) : watched ? (
+          <div className="watch-layout">
+            <div className="watch-main">
+              <ScreenTile
+                track={watched}
+                variant="main"
+                hasAudio={hasAudio(watched.participant.identity)}
+                stats={showStats ? inbound : null}
+                statsOpen={showStats}
+                onToggleStats={watched.participant.isLocal ? undefined : () => setShowStats(!showStats)}
+                onBack={backToGrid}
+              />
+            </div>
             {others.length > 0 && (
-              <div className="strip">
+              <div className="strip" aria-label="Outras telas na sala">
                 {others.map((t) => (
-                  <ScreenTile key={trackKey(t)} track={t} onFullscreen={fullscreen} onClick={() => setFocus(trackKey(t))} />
+                  <ScreenTile
+                    key={trackKey(t)}
+                    track={t}
+                    variant="thumb"
+                    hasAudio={hasAudio(t.participant.identity)}
+                    onWatch={() => watch(t)}
+                  />
                 ))}
               </div>
             )}
           </div>
         ) : (
-          <div className={`grid grid-${Math.min(screens.length, 4)}`}>
+          <div className="grid" aria-label="Telas na sala">
             {screens.map((t) => (
-              <ScreenTile key={trackKey(t)} track={t} onFullscreen={fullscreen} onClick={() => setFocus(trackKey(t))} />
+              <ScreenTile
+                key={trackKey(t)}
+                track={t}
+                variant="grid"
+                hasAudio={hasAudio(t.participant.identity)}
+                onWatch={() => watch(t)}
+              />
             ))}
           </div>
         )}
       </div>
 
+      {watchedAudio && <AudioTrack trackRef={watchedAudio} volume={audioVolume} muted={audioMuted} />}
+
       {error && <p className="error pad">{error}</p>}
-      <div className="controls">
-        <span className="muted small">
-          {participants.length} {participants.length === 1 ? 'pessoa' : 'pessoas'} na sala
-        </span>
-        <div className="audio-control" title="Volume do áudio recebido">
-          <button
-            className="icon"
-            title={audioMuted ? 'Ativar áudio' : 'Silenciar áudio'}
-            aria-label={audioMuted ? 'Ativar áudio' : 'Silenciar áudio'}
-            onClick={() => onAudioMutedChange(!audioMuted)}
-          >
-            {audioMuted || audioVolume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
-          </button>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={audioMuted ? 0 : audioVolume}
-            aria-label="Volume do áudio recebido"
-            onChange={(event) => {
-              const volume = Number(event.target.value)
-              onAudioVolumeChange(volume)
-              if (volume > 0 && audioMuted) onAudioMutedChange(false)
-            }}
+      <div className="controls" ref={controlsRef}>
+        <div className="controls-group">
+          <span className="muted small presence">
+            {participants.length} {participants.length === 1 ? 'pessoa' : 'pessoas'}
+          </span>
+          <VolumeControl
+            volume={audioVolume}
+            muted={audioMuted}
+            active={Boolean(watchedAudio)}
+            onVolumeChange={onAudioVolumeChange}
+            onMutedChange={onAudioMutedChange}
           />
+          {isScreenShareEnabled && outbound?.kind === 'outbound' && <OutboundBadge stats={outbound} />}
         </div>
-        <div className="spacer" />
-        {canPublish && (
-          <>
-            <label className="toggle" title="Compartilhar o áudio do computador junto com a tela">
-              <input
-                type="checkbox"
-                checked={withAudio}
-                disabled={isScreenShareEnabled}
-                onChange={(e) => setWithAudio(e.target.checked)}
-              />
-              Áudio do sistema
-            </label>
-            {isScreenShareEnabled ? (
-              <button className="danger" disabled={busy} onClick={stop}>
-                <MonitorOff size={16} /> Parar de compartilhar
-              </button>
-            ) : (
-              <button className="primary" disabled={busy} onClick={() => (isLinux ? start(null) : setPicking(true))}>
-                <MonitorUp size={16} /> {busy ? 'Iniciando…' : 'Compartilhar tela'}
-              </button>
-            )}
-          </>
-        )}
-        <button className="ghost danger" onClick={() => room.disconnect()}>
-          <PhoneOff size={16} /> Desconectar
-        </button>
+
+        <div className="controls-group end">
+          {canPublish && (
+            <>
+              <div className="segmented" role="radiogroup" aria-label="Modo da transmissão">
+                {(Object.keys(SHARE_MODES) as ShareMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    role="radio"
+                    aria-checked={shareMode === mode}
+                    className={shareMode === mode ? 'selected' : ''}
+                    title={SHARE_MODES[mode].hint}
+                    disabled={isScreenShareEnabled}
+                    onClick={() => chooseShareMode(mode)}
+                  >
+                    {SHARE_MODES[mode].label}
+                  </button>
+                ))}
+              </div>
+              <label
+                className={`chip ${withAudio ? 'on' : ''} ${isScreenShareEnabled ? 'locked' : ''}`}
+                title={withAudio ? 'Áudio do sistema: ligado' : 'Áudio do sistema: desligado'}
+              >
+                <input
+                  type="checkbox"
+                  checked={withAudio}
+                  disabled={isScreenShareEnabled}
+                  onChange={(e) => setWithAudio(e.target.checked)}
+                />
+                {withAudio ? <AudioLines size={15} /> : <AudioLinesOff size={15} />}
+                <span className="label">Áudio do sistema</span>
+              </label>
+              {isScreenShareEnabled ? (
+                <button className="danger" disabled={busy} onClick={stop} title="Parar de compartilhar">
+                  <MonitorOff size={16} /> <span className="label">Parar</span>
+                </button>
+              ) : (
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => (isLinux ? start(null) : setPicking(true))}
+                  title="Compartilhar tela"
+                >
+                  <MonitorUp size={16} /> <span className="label">{busy ? 'Iniciando…' : 'Compartilhar'}</span>
+                </button>
+              )}
+            </>
+          )}
+          <button className="ghost danger" onClick={() => room.disconnect()} title="Desconectar da sala">
+            <PhoneOff size={16} /> <span className="label">Sair</span>
+          </button>
+        </div>
       </div>
 
       {picking && <SourcePicker onPick={start} onClose={() => setPicking(false)} />}
@@ -326,36 +514,210 @@ export function Stage({
   )
 }
 
+/** What your share is sending: resolution (strong) and fps; warns when limited. */
+function OutboundBadge({ stats }: { stats: OutboundStats }) {
+  const top = stats.layers[0]
+  const limited = stats.layers.find((l) => l.limitation !== 'none')?.limitation
+  if (!top) return null
+  return (
+    <span
+      className={`out-badge ${limited ? 'warn' : ''}`}
+      title={`Você está transmitindo: ${stats.layers
+        .map((l) => `${l.height}p ${Math.round(l.fps)} fps ${mbps(l.kbps)}`)
+        .join(' · ')}${limited ? ` — ${limitationLabel[limited]}` : ''}`}
+    >
+      <span className="live-dot" />
+      <strong>{top.height}p</strong>
+      <span className="out-fps">{Math.round(top.fps)} fps</span>
+      {limited && <span className="out-limit">{limitationLabel[limited]}</span>}
+    </span>
+  )
+}
+
+/**
+ * Keeps the controls bar on one row: on every render and resize it measures
+ * whether the content fits and, if not, applies compact levels one by one
+ * (data-c1: drop secondary info; data-c2: icon-only; data-c3: allow a second
+ * row). Measuring works whatever the font, zoom or translation.
+ */
+function useFitLevels(ref: React.RefObject<HTMLDivElement | null>) {
+  // scrollWidth ignores overflow on overflow:visible boxes, so compare edges:
+  // groups don't shrink, so content that doesn't fit runs past the padding.
+  const fits = (el: HTMLElement) => {
+    const groups = [...el.children] as HTMLElement[]
+    if (groups.length === 0) return true
+    const style = getComputedStyle(el)
+    const box = el.getBoundingClientRect()
+    const right = box.right - parseFloat(style.paddingRight)
+    const gap = parseFloat(style.columnGap) || 0
+    const needed = groups.reduce((sum, g) => sum + g.getBoundingClientRect().width, 0) + gap * (groups.length - 1)
+    return needed <= right - (box.left + parseFloat(style.paddingLeft)) + 1
+  }
+  const fit = () => {
+    const el = ref.current
+    if (!el) return
+    for (const level of ['c1', 'c2', 'c3']) delete el.dataset[level]
+    for (const level of ['c1', 'c2', 'c3']) {
+      if (fits(el)) return
+      el.dataset[level] = ''
+    }
+  }
+  useLayoutEffect(fit)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const observer = new ResizeObserver(fit)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+function StatsPanel({ stats }: { stats: InboundStats | null }) {
+  if (!stats) return <div className="stats-panel">Medindo…</div>
+  return (
+    <div className="stats-panel">
+      <div>
+        {stats.width}×{stats.height} · {Math.round(stats.fps)} fps · {mbps(stats.kbps)}
+      </div>
+      <div>
+        Perda {stats.lossPct.toFixed(1)}% · jitter {Math.round(stats.jitterMs)} ms
+      </div>
+      <div className={stats.freezes > 0 || stats.framesDropped > 0 ? 'warn' : ''}>
+        Congelamentos {stats.freezes} · quadros perdidos {stats.framesDropped}
+      </div>
+    </div>
+  )
+}
+
 function ScreenTile({
   track,
-  big,
-  onClick,
-  onFullscreen
+  variant,
+  hasAudio,
+  stats,
+  statsOpen,
+  onWatch,
+  onBack,
+  onToggleStats
 }: {
   track: TrackReference
-  big?: boolean
-  onClick: () => void
-  onFullscreen: (el: HTMLElement | null) => void
+  variant: 'main' | 'thumb' | 'grid'
+  hasAudio: boolean
+  stats?: TrackStats | null
+  statsOpen?: boolean
+  onWatch?: () => void
+  onBack?: () => void
+  onToggleStats?: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const name = track.participant.name || track.participant.identity
+  const main = variant === 'main'
   return (
-    <div ref={ref} className={`tile ${big ? 'big' : ''}`} onClick={onClick} onDoubleClick={() => onFullscreen(ref.current)}>
+    <div
+      ref={ref}
+      className={`tile ${variant}`}
+      onClick={onWatch}
+      onDoubleClick={() => void ref.current?.requestFullscreen()}
+      role={onWatch ? 'button' : undefined}
+      aria-label={onWatch ? `Assistir a tela de ${name}` : undefined}
+    >
       <VideoTrack trackRef={track} />
       <span className="tile-name">
+        {main && !track.participant.isLocal && hasAudio && <Volume2 size={12} />}
         {name}
         {track.participant.isLocal && ' (você)'}
       </span>
+      {onWatch && (
+        <span className="tile-watch">
+          <Eye size={14} /> Assistir{hasAudio && !track.participant.isLocal ? ' com áudio' : ''}
+        </span>
+      )}
+      <div className="tile-actions" onClick={(e) => e.stopPropagation()}>
+        {onToggleStats && (
+          <button
+            className={`icon ${statsOpen ? 'active' : ''}`}
+            title="Qualidade da conexão"
+            aria-label="Qualidade da conexão"
+            onClick={onToggleStats}
+          >
+            <Activity size={14} />
+          </button>
+        )}
+        {onBack && (
+          <button className="icon" title="Ver todas as telas" aria-label="Ver todas as telas" onClick={onBack}>
+            <LayoutGrid size={14} />
+          </button>
+        )}
+        {variant !== 'thumb' && (
+          <button
+            className="icon"
+            title="Tela cheia"
+            aria-label="Tela cheia"
+            onClick={() => void ref.current?.requestFullscreen()}
+          >
+            <Maximize2 size={14} />
+          </button>
+        )}
+      </div>
+      {main && statsOpen && <StatsPanel stats={stats?.kind === 'inbound' ? stats : null} />}
+    </div>
+  )
+}
+
+/** Volume of the watched screen's audio: icon (mute), filled slider, value; wheel adjusts. */
+function VolumeControl({
+  volume,
+  muted,
+  active,
+  onVolumeChange,
+  onMutedChange
+}: {
+  volume: number
+  muted: boolean
+  /** Whether a watched screen with audio is playing. */
+  active: boolean
+  onVolumeChange: (volume: number) => void
+  onMutedChange: (muted: boolean) => void
+}) {
+  const level = muted ? 0 : volume
+  const pct = Math.round(level * 100)
+  const set = (v: number) => {
+    const next = Math.min(1, Math.max(0, Math.round(v * 100) / 100))
+    onVolumeChange(next)
+    if (next > 0 && muted) onMutedChange(false)
+  }
+  const toggleMute = () => {
+    if (!muted && volume > 0) return onMutedChange(true)
+    onMutedChange(false)
+    if (volume === 0) onVolumeChange(0.5) // unmuting at 0 would stay silent
+  }
+  const Icon = level === 0 ? VolumeX : level < 0.5 ? Volume1 : Volume2
+  return (
+    <div
+      className={`volume ${active ? '' : 'idle'}`}
+      title={active ? 'Volume da tela que você está assistindo' : 'Nenhuma tela com áudio sendo assistida'}
+      onWheel={(e) => set(level + (e.deltaY < 0 ? 0.05 : -0.05))}
+    >
       <button
-        className="icon tile-fullscreen"
-        title="Tela cheia"
-        onClick={(e) => {
-          e.stopPropagation()
-          onFullscreen(ref.current)
-        }}
+        className="icon volume-icon"
+        title={muted ? 'Ativar áudio' : 'Silenciar áudio'}
+        aria-label={muted ? 'Ativar áudio' : 'Silenciar áudio'}
+        onClick={toggleMute}
       >
-        <Maximize2 size={14} />
+        <Icon size={16} />
       </button>
+      <input
+        className="volume-range"
+        type="range"
+        min="0"
+        max="1"
+        step="0.01"
+        value={level}
+        aria-label="Volume da tela assistida"
+        aria-valuetext={`${pct}%`}
+        style={{ '--level': level } as CSSProperties}
+        onChange={(e) => set(Number(e.target.value))}
+      />
+      <span className="volume-value">{pct}%</span>
     </div>
   )
 }

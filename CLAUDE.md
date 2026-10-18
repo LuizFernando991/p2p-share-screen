@@ -190,8 +190,14 @@ docker run --rm --network host livekit/livekit-cli room join --url ws://127.0.0.
   - O renderer manda `{ room, sharing }` (`window.api.tray.setState`) e o main pede para parar via IPC `tray:stop-share` (`window.api.tray.onStopShare`). O `stop()` sempre reenvia o estado no fim, para a bandeja nunca ficar dessincronizada.
   - Fechar a janela esconde o app na bandeja (avisa uma vez, por notificação). Uma instância por perfil: abrir de novo traz a janela de volta (`requestSingleInstanceLock`).
   - Testável sem mexer na tela: o menu é exportado via dbusmenu; dá para ler (`GetLayout`) e clicar (`Event ... clicked`) com `busctl --user` no item `org.freedesktop.StatusNotifierItem-<pid>-1`.
-- **Assistir (estilo Discord):** o vídeo fica na janela principal: grade com as telas ao vivo da sala, clique para focar, tela cheia. Usar `adaptiveStream`/`dynacast` do `livekit-client` para que miniaturas peçam camadas baixas e só a tela em foco venha em alta.
-- **Publicação de tela:** `setScreenShareEnabled` com `contentHint: 'detail'`, 1080p30 e camadas de simulcast `h360fps3` e `h720fps15`. O áudio do sistema no Linux é publicado à parte (`publishTrack`, `ScreenShareAudio`, estéreo, `musicHighQualityStereo`, sem DTX/RED). Quando a transmissão para (inclusive pelo sistema), o áudio é derrubado junto (`LocalTrackUnpublished`).
+- **Assistir (estilo Discord):** quem assiste **escolhe uma tela**. Ela fica em destaque, recebe a camada **alta** (`setVideoQuality(HIGH)`) e é a **única com áudio**: o `Stage` toca só o `ScreenShareAudio` dela (`<AudioTrack>`) e **dessinscreve** (`setSubscribed(false)`) o áudio das outras. As demais viram miniaturas na camada baixa. Com uma tela só na sala, ela entra em destaque sozinha; o botão de grade volta para todas (sem áudio). A escolha é por participante (identity), então sobrevive a recompartilhar.
+  - `adaptiveStream` fica **desligado**: com ele, a camada era escolhida pelo tamanho do elemento, e uma tela em destaque numa janela comum caía na camada do meio. `dynacast` continua ligado (camadas sem ninguém assistindo pausam no transmissor).
+  - **Responsividade:** os controles ficam numa linha e se ajustam **por medição** (`useFitLevels` no `Stage`): a cada render e resize, o app verifica se os grupos cabem (comparando larguras, porque `scrollWidth` ignora o transbordo em caixas `overflow: visible`) e aplica níveis cumulativos até caber: `data-c1` (some contagem, % do volume e o texto de limitação), `data-c2` (botões e chip de áudio só com ícone, fps do selo some, slider e seletor encolhem), `data-c3` (permite segunda linha). Grupos e itens têm `flex-shrink: 0`, então o que não cabe transborda e é detectado em vez de se sobrepor. Larguras fixas (media/container queries) falharam com a fonte e a tela do usuário. Verificado de 1280 a 800 px, a cada 20 px, com zoom de 100% e 115%: nenhuma sobreposição. A tela assistida é dimensionada em 16:9 com `cqw`/`cqh` (`.watch-main` é container de tamanho), para nome, ações e estatísticas ficarem sobre o vídeo. A grade usa `auto-fit` com mínimo de 300 px por coluna. Abaixo de 1180 px de janela, o painel de membros flutua sobre o palco.
+  - Painel "Qualidade da conexão" (ícone de atividade na tela assistida): resolução, fps, bitrate, perda, jitter, congelamentos. Quem transmite vê nos controles a camada alta saindo e se há limitação por CPU/banda (`lib/stats.ts`, a partir de `getRTCStatsReport`).
+- **Publicação de tela (`lib/share.ts`):** `setScreenShareEnabled` com 1080p30 e camadas de simulcast **720p30** e **360p15** (todas com fps assistível). Dois modos, escolhidos antes de transmitir e salvos no `localStorage`:
+  - **Fluidez** (padrão): `contentHint: 'motion'` (sem banda, baixa a resolução e mantém 30 fps) e teto de **8 Mbps** na camada alta;
+  - **Nitidez**: `contentHint: 'detail'` (mantém a resolução e baixa o fps) e teto de 5 Mbps.
+  - Medido (Ryzen 7 5700X, local): antes, quem assistia recebia **720p a 15 fps** (camada `h720fps15` + adaptiveStream); com 5 Mbps, movimento intenso em 1080p caía para 22 fps (teto de bitrate). Agora: 1080p a 30 fps (~8 Mbps em movimento intenso), sem quadros perdidos. Codificação de 4 a 6 ms por quadro: a CPU não era o gargalo. O áudio do sistema no Linux é publicado à parte (`publishTrack`, `ScreenShareAudio`, estéreo, `musicHighQualityStereo`, sem DTX/RED). Quando a transmissão para (inclusive pelo sistema), o áudio é derrubado junto (`LocalTrackUnpublished`).
 
 ### Estrutura (`desktop/`)
 ```
@@ -206,6 +212,9 @@ src/preload/index.ts       # contextBridge → window.api
 src/renderer/src/          # React: App, pages/ (Login, Shell, RoomPage, AdminPage),
                            # components/ (Stage, MembersPanel, Dialogs, SourcePicker), lib/api.ts
 e2e/two-users.mjs          # E2E com duas instâncias (Playwright + Electron)
+e2e/watch.mjs              # E2E com três instâncias: escolher tela, áudio isolado, camada alta, layout estreito
+src/renderer/src/lib/share.ts  # opções de captura/publicação (modos) + padrão de teste (dev)
+src/renderer/src/lib/stats.ts  # resumo das estatísticas WebRTC (envio/recebimento)
 ```
 
 ### Comandos e armadilhas
@@ -218,7 +227,11 @@ npm run typecheck && npm run build
 SHARESCREEN_PROFILE=b npm run dev             # segunda instância/usuário (userData separado)
 SHARESCREEN_SERVER=https://... npm run dev    # servidor padrão da tela de login
 E2E_ADMIN=admin:senha E2E_VIEWER=viewer:senha E2E_OUT=/tmp/shots node e2e/two-users.mjs
+E2E_A=admin:senha E2E_B=viewer:senha E2E_C=terceiro:senha E2E_OUT=/tmp/shots node e2e/watch.mjs   # precisa do npm run dev
 ```
+- **Gancho de diagnóstico (só em dev):** `window.__share` no `Stage`: `testPattern(motion, toneHz?)` publica um padrão 1080p animado (e um tom como áudio da tela) com as mesmas opções da tela real, sem o seletor; `stats()` e `audioSubscriptions()` leem o estado. Instâncias de teste usam `ELECTRON_RENDERER_URL=http://localhost:5173` para pegar o renderer de dev.
+- **Recusar `getDisplayMedia` no Electron 43:** não há API de recusa. `callback({})` faz a página rejeitar na hora com `AbortError` ("Invalid capture constraints"), mas o callback também lança no main ("Video was requested..."). Por isso `deny()` envolve em `try/catch`, e a página trata `AbortError` como cancelamento (além de `NotAllowedError`).
+- **O dev server do Vite pode ficar servindo CSS/módulos antigos** depois de edições que trocam o arquivo (`perl -i`, `sed -i`), mesmo com `touch`: a requisição direta (`curl localhost:5173/src/styles.css?direct`) mostra o novo, mas a página segue com o antigo. Antes de medir layout, confira na própria página (`getComputedStyle`) que a regra nova está ativa; se não estiver, reinicie o `npm run dev`. Ao conferir com `curl`, procure trechos de **código**: o Vite remove comentários.
 - **`npm run build`/`dist:*` apagam `out/`, que o `npm run dev` usa:** pare o dev antes de empacotar.
 - **O terminal do VS Code exporta `ELECTRON_RUN_AS_NODE=1`**, que faz o Electron rodar como Node puro (sem janela; `electron --version` mostra a versão do Node). Rode com `env -u ELECTRON_RUN_AS_NODE npm run dev`. O script E2E já remove a variável.
 - O `@vencord/venmic` é dependência opcional e nativa: precisa ficar em `external` no `electron.vite.config.ts`. Empacotado, ele não acha o binário. Exporta via CommonJS, então o `PatchBay` pode vir em `default` no `import()`.

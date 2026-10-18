@@ -1,4 +1,4 @@
-import { LiveKitRoom, RoomAudioRenderer } from '@livekit/components-react'
+import { LiveKitRoom } from '@livekit/components-react'
 import { Hash, LogOut, MoreHorizontal, Timer, Trash2, UserPlus, Users } from 'lucide-react'
 import { useState } from 'react'
 
@@ -62,12 +62,12 @@ export function RoomPage({
         </span>
         <div className="spacer" />
         {room.join_code && (
-          <button className="ghost" onClick={() => setDialog('invite')}>
-            <UserPlus size={16} /> Convidar
+          <button className="ghost" onClick={() => setDialog('invite')} title="Convidar">
+            <UserPlus size={16} /> <span className="label">Convidar</span>
           </button>
         )}
-        <button className={`ghost ${showMembers ? 'active' : ''}`} onClick={() => setShowMembers(!showMembers)}>
-          <Users size={16} /> Membros
+        <button className={`ghost ${showMembers ? 'active' : ''}`} onClick={() => setShowMembers(!showMembers)} title="Membros">
+          <Users size={16} /> <span className="label">Membros</span>
           <span className="count">{room.member_count}</span>
         </button>
         {actions.length > 0 && <Menu label="Mais ações" trigger={<MoreHorizontal size={18} />} items={actions} />}
@@ -83,7 +83,8 @@ export function RoomPage({
               connect
               audio={false}
               video={false}
-              options={{ adaptiveStream: true, dynacast: true }}
+              // No adaptiveStream: the Stage picks layers by what the viewer watches.
+              options={{ adaptiveStream: false, dynacast: true }}
               onDisconnected={() => {
                 setJoin(null)
                 onChanged()
@@ -99,7 +100,6 @@ export function RoomPage({
                 onAudioVolumeChange={setAudioVolume}
                 onAudioMutedChange={setAudioMuted}
               />
-              <RoomAudioRenderer volume={audioVolume} muted={audioMuted} />
             </LiveKitRoom>
           ) : (
             <div className="lobby">

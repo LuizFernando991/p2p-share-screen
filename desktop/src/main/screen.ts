@@ -34,6 +34,19 @@ let pending: { sourceId: string | null; audio: boolean } = { sourceId: null, aud
  * returns only the chosen one; elsewhere the renderer picks first and calls
  * select().
  */
+/**
+ * Denies a display media request (picker cancelled, source gone). Electron
+ * has no explicit deny: an empty answer makes the page's getDisplayMedia
+ * reject at once with AbortError, but the callback also throws in main.
+ */
+function deny(callback: (streams: Electron.Streams) => void): void {
+  try {
+    callback({})
+  } catch {
+    // Expected: "Video was requested, but no video stream was provided".
+  }
+}
+
 export function registerDisplayMediaHandler(session: Session): void {
   session.setDisplayMediaRequestHandler(async (_request, callback) => {
     const { sourceId } = pending
@@ -45,14 +58,14 @@ export function registerDisplayMediaHandler(session: Session): void {
       })
       const source = sourceId ? sources.find((s) => s.id === sourceId) : sources[0]
       if (!source) {
-        callback({})
+        deny(callback)
         return
       }
       // Linux publishes audio through venmic; Windows uses the native capture
       // path below so excluded applications do not enter the stream.
       callback({ video: source })
     } catch {
-      callback({})
+      deny(callback)
     }
   })
 }

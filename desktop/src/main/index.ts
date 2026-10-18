@@ -32,8 +32,8 @@ function createWindow(settings: Settings): void {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    minWidth: 960,
-    minHeight: 600,
+    minWidth: 800,
+    minHeight: 540,
     show: false,
     title: 'ShareScreen',
     icon: resource('icon.png'),

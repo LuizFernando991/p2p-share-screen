@@ -480,53 +480,53 @@ label.toggle {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   background: var(--bg-deep);
 }
 
 .stage-area {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   padding: 12px;
   display: flex;
 }
 
+/* All screens: as many 16:9 columns as fit (min 300px or full width), centered. */
 .grid {
   flex: 1;
   display: grid;
   gap: 8px;
-  grid-auto-rows: 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  align-content: center;
+  overflow-y: auto;
 }
 
-.grid-1 {
-  grid-template-columns: 1fr;
+.tile.grid {
+  aspect-ratio: 16 / 9;
 }
 
-.grid-2 {
-  grid-template-columns: 1fr 1fr;
-}
-
-.grid-3,
-.grid-4 {
-  grid-template-columns: 1fr 1fr;
-}
-
-.focus-layout {
+/* Watching one screen: it fills the area, other screens become thumbnails. */
+.watch-layout {
   flex: 1;
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-height: 0;
+  min-width: 0;
 }
 
 .strip {
   display: flex;
   gap: 8px;
-  height: 120px;
+  height: 112px;
   flex-shrink: 0;
+  overflow-x: auto;
 }
 
 .strip .tile {
-  width: 213px;
+  width: 200px;
+  flex-shrink: 0;
 }
 
 .tile {
@@ -534,12 +534,38 @@ label.toggle {
   background: var(--video-bg);
   border-radius: var(--radius);
   overflow: hidden;
-  cursor: pointer;
   min-height: 0;
+  min-width: 0;
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  transition: outline-color 120ms;
 }
 
-.tile.big {
+.tile.grid,
+.tile.thumb {
+  cursor: pointer;
+}
+
+.tile.grid:hover,
+.tile.thumb:hover,
+.tile:focus-visible {
+  outline-color: var(--accent);
+}
+
+/* The watched screen is sized to a 16:9 box that fits the free area, so its
+   name, actions and stats sit on the video instead of on letterbox bars. */
+.watch-main {
   flex: 1;
+  min-height: 0;
+  container-type: size;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tile.main {
+  width: min(100cqw, 100cqh * 16 / 9);
+  aspect-ratio: 16 / 9;
 }
 
 .tile video {
@@ -553,6 +579,13 @@ label.toggle {
   position: absolute;
   left: 8px;
   bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 16px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   background: var(--overlay);
   padding: 2px 8px;
   border-radius: 4px;
@@ -560,57 +593,284 @@ label.toggle {
   color: var(--text-strong);
 }
 
-.tile-fullscreen {
+.tile-watch {
   position: absolute;
-  right: 6px;
-  top: 6px;
-  background: var(--overlay) !important;
-  color: var(--text-strong) !important;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: rgb(24 25 38 / 55%);
+  color: var(--text-strong);
+  font-weight: 600;
   opacity: 0;
+  transition: opacity 120ms;
 }
 
-.tile:hover .tile-fullscreen {
+.tile:hover .tile-watch,
+.tile:focus-visible .tile-watch {
   opacity: 1;
 }
 
+.tile.thumb .tile-watch {
+  font-size: 12px;
+}
+
+.tile-actions {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+
+.tile:hover .tile-actions,
+.tile-actions:focus-within,
+.tile-actions:has(.active) {
+  opacity: 1;
+}
+
+.tile-actions .icon {
+  background: var(--overlay);
+  color: var(--text-strong);
+}
+
+.tile-actions .icon.active {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.stats-panel {
+  position: absolute;
+  top: 42px;
+  right: 6px;
+  background: var(--overlay);
+  color: var(--text-strong);
+  font: 12px/1.6 ui-monospace, 'JetBrains Mono', monospace;
+  padding: 8px 10px;
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.stats-panel .warn {
+  color: var(--ctp-yellow);
+}
+
+/* One row; it compacts by the stage's own width (container queries on .stage
+   below), since the sidebar and members panel change the space it gets. */
 .controls {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  gap: 8px 12px;
+  padding: 8px 12px;
   background: var(--bg-sidebar);
 }
 
-.audio-control {
+/* Groups and items never shrink: content that does not fit overflows (and
+   is measured), instead of silently overlapping. */
+.controls-group {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
-  gap: 6px;
-  min-width: 130px;
+  flex-wrap: nowrap;
+  gap: 8px;
 }
 
-.audio-control input[type='range'] {
-  width: 88px;
-  height: 16px;
+.controls-group > * {
+  flex-shrink: 0;
+}
+
+/* Toggle chip (system audio): icon + label, accent when on. */
+.chip {
+  position: relative;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--bg-deep);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: normal;
+  text-transform: none;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.chip input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chip:hover {
+  color: var(--text-strong);
+}
+
+.chip.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.chip.locked {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.chip:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+}
+
+.controls-group.end {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.presence {
+  white-space: nowrap;
+}
+
+/* Your live share: red dot, resolution (strong), fps (muted). */
+.out-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgb(237 135 150 / 12%);
+  color: var(--text-strong);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.out-badge strong {
+  font-weight: 700;
+}
+
+.out-fps,
+.out-limit {
+  color: var(--muted);
+}
+
+.out-limit::before {
+  content: '· ';
+}
+
+.out-badge .live-dot {
+  background: var(--live);
+}
+
+.out-badge.warn {
+  color: var(--ctp-yellow);
+  background: rgb(238 212 159 / 14%);
+}
+
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-deep);
+  border-radius: 6px;
+}
+
+.segmented button {
+  background: transparent;
+  color: var(--muted);
+  padding: 5px 10px;
+  font-size: 13px;
+}
+
+.segmented button.selected {
+  background: var(--bg-active);
+  color: var(--text-strong);
+}
+
+/* Volume: pill with icon, filled track and value. --level (0..1) drives the fill,
+   offset by half the thumb so the fill always ends under the thumb's center. */
+.volume {
+  --thumb: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 10px 0 2px;
+  background: var(--bg-deep);
+  border-radius: 999px;
+  transition: opacity 120ms;
+}
+
+.volume.idle {
+  opacity: 0.55;
+}
+
+.volume-icon {
+  border-radius: 999px;
+  padding: 4px 6px;
+}
+
+.volume-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 104px;
+  height: 20px;
+  margin: 0;
   padding: 0;
   border: 0;
   background: transparent;
-  accent-color: var(--accent);
+  cursor: pointer;
 }
 
-.audio-control input[type='range']::-webkit-slider-runnable-track {
-  height: 4px;
+.volume-range:focus {
+  border-color: transparent;
+}
+
+.volume-range::-webkit-slider-runnable-track {
+  height: 6px;
   border-radius: 999px;
-  background: var(--bg-active);
+  background: linear-gradient(
+    to right,
+    var(--accent) 0,
+    var(--accent) calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--level, 0)),
+    var(--bg-active) calc(var(--thumb) / 2 + (100% - var(--thumb)) * var(--level, 0))
+  );
 }
 
-.audio-control input[type='range']::-webkit-slider-thumb {
-  width: 12px;
-  height: 12px;
-  margin-top: -4px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--accent);
+.volume-range::-webkit-slider-thumb {
   -webkit-appearance: none;
+  appearance: none;
+  width: var(--thumb);
+  height: var(--thumb);
+  margin-top: calc((6px - var(--thumb)) / 2);
+  border-radius: 50%;
+  background: var(--text-strong);
+  border: 3px solid var(--accent);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 40%);
+  transition: transform 100ms;
+}
+
+.volume-range:hover::-webkit-slider-thumb,
+.volume-range:active::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+
+.volume-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.volume-value {
+  width: 4ch;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 /* Members */
@@ -1116,4 +1376,86 @@ button.success-button {
     opacity: 0;
     transform: translateY(8px);
   }
+}
+
+/* Responsive */
+.room-header h2 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-body {
+  position: relative;
+}
+
+/* Narrow windows: the members panel floats over the stage instead of squeezing it. */
+@media (max-width: 1180px) {
+  .sidebar {
+    width: 220px;
+  }
+
+  .members-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 15;
+    box-shadow: -8px 0 24px rgb(0 0 0 / 35%);
+  }
+}
+
+/* Icon-only buttons; text stays in tooltips. */
+@media (max-width: 1000px) {
+  .room-header button .label,
+  .room-header .badge {
+    display: none;
+  }
+
+  .strip {
+    height: 88px;
+  }
+
+  .strip .tile {
+    width: 156px;
+  }
+}
+
+@media (max-width: 860px) {
+  .sidebar {
+    width: 190px;
+  }
+}
+
+/* Controls compact by measured fit (useFitLevels in Stage.tsx), one level at
+   a time, until the row fits: c1 drops secondary info, c2 goes icon-only,
+   c3 allows a second row. */
+.controls[data-c1] .presence,
+.controls[data-c1] .volume-value,
+.controls[data-c1] .out-limit {
+  display: none;
+}
+
+.controls[data-c2] button .label,
+.controls[data-c2] .chip .label,
+.controls[data-c2] .out-fps {
+  display: none;
+}
+
+.controls[data-c2] .chip {
+  padding: 0 9px;
+}
+
+.controls[data-c2] .segmented button {
+  padding: 5px 7px;
+  font-size: 12px;
+}
+
+.controls[data-c2] .volume-range {
+  width: 64px;
+}
+
+.controls[data-c3] {
+  flex-wrap: wrap;
 }
