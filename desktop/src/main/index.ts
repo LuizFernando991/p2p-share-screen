@@ -108,7 +108,9 @@ function registerIpc(backend: Backend, settings: Settings): void {
   ipcMain.handle('screen:select', (_e, sourceId: string | null, audio: boolean) =>
     selectSource(sourceId ? String(sourceId) : null, Boolean(audio))
   )
-  ipcMain.handle('screen:start-system-audio', () => startSystemAudio(settings.audioExcludedApps))
+  ipcMain.handle('screen:start-system-audio', (event) =>
+    startSystemAudio(settings.audioExcludedApps, (chunk) => event.sender.send('screen:audio-data', chunk))
+  )
   ipcMain.handle('screen:stop-system-audio', () => stopSystemAudio())
   ipcMain.on('tray:state', (_e, state: MediaState) => {
     tray.setState({ room: typeof state?.room === 'string' ? state.room : null, sharing: Boolean(state?.sharing) })

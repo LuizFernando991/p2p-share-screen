@@ -34,7 +34,12 @@ const api: DesktopApi = {
     listSources: () => ipcRenderer.invoke('screen:list-sources'),
     select: (sourceId, audio) => ipcRenderer.invoke('screen:select', sourceId, audio),
     startSystemAudio: () => ipcRenderer.invoke('screen:start-system-audio'),
-    stopSystemAudio: () => ipcRenderer.invoke('screen:stop-system-audio')
+    stopSystemAudio: () => ipcRenderer.invoke('screen:stop-system-audio'),
+    onAudioData: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: Uint8Array): void => callback(data)
+      ipcRenderer.on('screen:audio-data', listener)
+      return () => ipcRenderer.removeListener('screen:audio-data', listener)
+    }
   }
 }
 

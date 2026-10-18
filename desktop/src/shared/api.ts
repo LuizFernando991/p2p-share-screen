@@ -117,9 +117,10 @@ export interface DesktopApi {
     listSources(): Promise<ScreenSource[]>
     /** Chooses the source and audio for the next getDisplayMedia call. */
     select(sourceId: string | null, audio: boolean): Promise<void>
-    /** Linux: links every app's audio except ours into a virtual microphone. */
+    /** Starts the platform-specific system audio capture. */
     startSystemAudio(): Promise<boolean>
     stopSystemAudio(): Promise<void>
+    onAudioData(callback: (data: Uint8Array) => void): () => void
   }
 }
 

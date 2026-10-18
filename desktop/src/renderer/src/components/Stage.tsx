@@ -44,6 +44,7 @@ export function Stage({ roomName, canPublish }: { roomName: string; canPublish: 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const systemAudio = useRef<MediaStreamTrack | null>(null)
+  const systemAudioCleanup = useRef<(() => void) | null>(null)
 
   const focused = screens.find((t) => trackKey(t) === focus) ?? (screens.length === 1 ? screens[0] : undefined)
   const others = focused ? screens.filter((t) => t !== focused) : screens
@@ -55,7 +56,9 @@ export function Stage({ roomName, canPublish }: { roomName: string; canPublish: 
       await localParticipant.unpublishTrack(track, true).catch(() => undefined)
       track.stop()
     }
-    if (isLinux) await window.api.screen.stopSystemAudio()
+    systemAudioCleanup.current?.()
+    systemAudioCleanup.current = null
+    await window.api.screen.stopSystemAudio()
   }
 
   // Stopping the share from the OS (portal/indicator) unpublishes the video;
@@ -70,10 +73,34 @@ export function Stage({ roomName, canPublish }: { roomName: string; canPublish: 
     }
   })
 
-  async function publishLinuxSystemAudio() {
-    if (!(await window.api.screen.startSystemAudio())) {
-      throw new Error('Áudio do sistema indisponível: PipeWire não encontrado.')
+  async function publishSystemAudio() {
+    let track: MediaStreamTrack
+    let cleanup: () => void
+    if (isLinux) {
+      if (!(await window.api.screen.startSystemAudio())) {
+        throw new Error('Áudio do sistema indisponível: PipeWire não encontrado.')
+      }
+      ;({ track, cleanup } = await createLinuxAudioTrack())
+    } else {
+      ;({ track, cleanup } = await createWindowsAudioTrack())
+      if (!(await window.api.screen.startSystemAudio())) {
+        cleanup()
+        throw new Error('Áudio do sistema indisponível.')
+      }
     }
+    systemAudio.current = track
+    systemAudioCleanup.current = cleanup
+    await localParticipant.publishTrack(track, {
+      source: Track.Source.ScreenShareAudio,
+      name: 'screen-audio',
+      dtx: false,
+      red: false,
+      forceStereo: true,
+      audioPreset: AudioPresets.musicHighQualityStereo
+    })
+  }
+
+  async function createLinuxAudioTrack(): Promise<{ track: MediaStreamTrack; cleanup: () => void }> {
     const device = await findSystemAudioDevice()
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -85,16 +112,56 @@ export function Stage({ roomName, canPublish }: { roomName: string; canPublish: 
         sampleRate: 48000
       }
     })
-    const [track] = stream.getAudioTracks()
-    systemAudio.current = track
-    await localParticipant.publishTrack(track, {
-      source: Track.Source.ScreenShareAudio,
-      name: 'screen-audio',
-      dtx: false,
-      red: false,
-      forceStereo: true,
-      audioPreset: AudioPresets.musicHighQualityStereo
+    return { track: stream.getAudioTracks()[0], cleanup: () => stream.getTracks().forEach((track) => track.stop()) }
+  }
+
+  async function createWindowsAudioTrack(): Promise<{ track: MediaStreamTrack; cleanup: () => void }> {
+    const context = new AudioContext({ sampleRate: 48000 })
+    const destination = context.createMediaStreamDestination()
+    const processor = context.createScriptProcessor(4096, 0, 2)
+    const chunks: Float32Array[] = []
+    let offset = 0
+
+    const unsubscribe = window.api.screen.onAudioData((data) => {
+      const samples = new Float32Array(data.byteLength / 2)
+      const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+      for (let i = 0; i < samples.length; i++) samples[i] = view.getInt16(i * 2, true) / 32768
+      chunks.push(samples)
     })
+    processor.onaudioprocess = (event) => {
+      const left = event.outputBuffer.getChannelData(0)
+      const right = event.outputBuffer.getChannelData(1)
+      left.fill(0)
+      right.fill(0)
+      let written = 0
+      while (written < left.length && chunks.length > 0) {
+        const chunk = chunks[0]
+        const availableFrames = Math.floor((chunk.length - offset) / 2)
+        const frames = Math.min(left.length - written, availableFrames)
+        for (let i = 0; i < frames; i++) {
+          left[written + i] = chunk[offset + i * 2]
+          right[written + i] = chunk[offset + i * 2 + 1]
+        }
+        written += frames
+        offset += frames * 2
+        if (offset >= chunk.length) {
+          chunks.shift()
+          offset = 0
+        }
+      }
+    }
+    processor.connect(destination)
+    await context.resume()
+    const [track] = destination.stream.getAudioTracks()
+    return {
+      track,
+      cleanup: () => {
+        unsubscribe()
+        processor.disconnect()
+        track.stop()
+        void context.close()
+      }
+    }
   }
 
   async function start(sourceId: string | null) {
@@ -106,7 +173,7 @@ export function Stage({ roomName, canPublish }: { roomName: string; canPublish: 
       await localParticipant.setScreenShareEnabled(
         true,
         {
-          audio: !isLinux && withAudio,
+          audio: false,
           contentHint: 'detail',
           resolution: ScreenSharePresets.h1080fps30.resolution,
           selfBrowserSurface: 'exclude'
@@ -117,9 +184,9 @@ export function Stage({ roomName, canPublish }: { roomName: string; canPublish: 
           screenShareSimulcastLayers: [ScreenSharePresets.h360fps3, ScreenSharePresets.h720fps15]
         }
       )
-      if (isLinux && withAudio) {
+      if (withAudio) {
         try {
-          await publishLinuxSystemAudio()
+          await publishSystemAudio()
         } catch (err) {
           setError(`A tela está sendo compartilhada, mas sem áudio: ${err instanceof Error ? err.message : err}`)
         }

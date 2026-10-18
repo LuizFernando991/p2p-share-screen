@@ -203,8 +203,8 @@ export function SettingsDialog({ server, onClose }: { server: string; onClose: (
             />
           </label>
           <p className="muted small">
-            Um nome por linha. No Linux, use o nome do aplicativo exibido pelo PipeWire. A alteração vale na próxima
-            transmissão.
+            Um nome por linha. No Linux, use o nome exibido pelo PipeWire; no Windows, use o nome do processo, como
+            Discord.exe. A alteração vale na próxima transmissão.
           </p>
           <button
             className="primary"

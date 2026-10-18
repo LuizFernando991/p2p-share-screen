@@ -7,7 +7,7 @@ export default defineConfig({
       rollupOptions: {
         // Native module (optional dependency, so not externalized by default):
         // bundling it breaks how it locates its prebuilt binary.
-        external: ['@vencord/venmic']
+        external: ['@vencord/venmic', 'loopback-capture']
       }
     }
   },

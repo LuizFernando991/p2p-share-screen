@@ -15,6 +15,7 @@ asarUnpack:
   # Real file paths for tray/notification icons and the native venmic addon.
   - resources/**
   - node_modules/@vencord/venmic/**
+  - node_modules/loopback-capture/**
 
 linux:
   # Also names the .desktop file (sharescreen.desktop), which must match
