@@ -7,7 +7,7 @@ import {
   type TrackReference
 } from '@livekit/components-react'
 import { AudioPresets, RoomEvent, ScreenSharePresets, Track, type LocalTrackPublication } from 'livekit-client'
-import { Maximize2, MonitorOff, MonitorUp, PhoneOff } from 'lucide-react'
+import { Maximize2, MonitorOff, MonitorUp, PhoneOff, Volume2, VolumeX } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { SYSTEM_AUDIO_DEVICE_LABEL } from '../../../shared/api'
@@ -31,7 +31,21 @@ async function findSystemAudioDevice(): Promise<MediaDeviceInfo> {
 }
 
 /** The screens being shared in the room, Discord-style, plus the share controls. */
-export function Stage({ roomName, canPublish }: { roomName: string; canPublish: boolean }) {
+export function Stage({
+  roomName,
+  canPublish,
+  audioVolume,
+  audioMuted,
+  onAudioVolumeChange,
+  onAudioMutedChange
+}: {
+  roomName: string
+  canPublish: boolean
+  audioVolume: number
+  audioMuted: boolean
+  onAudioVolumeChange: (volume: number) => void
+  onAudioMutedChange: (muted: boolean) => void
+}) {
   const room = useRoomContext()
   const participants = useParticipants()
   const { localParticipant, isScreenShareEnabled } = useLocalParticipant()
@@ -256,6 +270,29 @@ export function Stage({ roomName, canPublish }: { roomName: string; canPublish: 
         <span className="muted small">
           {participants.length} {participants.length === 1 ? 'pessoa' : 'pessoas'} na sala
         </span>
+        <div className="audio-control" title="Volume do áudio recebido">
+          <button
+            className="icon"
+            title={audioMuted ? 'Ativar áudio' : 'Silenciar áudio'}
+            aria-label={audioMuted ? 'Ativar áudio' : 'Silenciar áudio'}
+            onClick={() => onAudioMutedChange(!audioMuted)}
+          >
+            {audioMuted || audioVolume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
+          </button>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            value={audioMuted ? 0 : audioVolume}
+            aria-label="Volume do áudio recebido"
+            onChange={(event) => {
+              const volume = Number(event.target.value)
+              onAudioVolumeChange(volume)
+              if (volume > 0 && audioMuted) onAudioMutedChange(false)
+            }}
+          />
+        </div>
         <div className="spacer" />
         {canPublish && (
           <>

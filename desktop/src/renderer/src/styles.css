@@ -581,6 +581,18 @@ label.toggle {
   background: var(--bg-sidebar);
 }
 
+.audio-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 130px;
+}
+
+.audio-control input[type='range'] {
+  width: 88px;
+  accent-color: var(--accent);
+}
+
 /* Members */
 .members-panel {
   width: 280px;

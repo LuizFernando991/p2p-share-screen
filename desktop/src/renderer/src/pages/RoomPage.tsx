@@ -29,6 +29,8 @@ export function RoomPage({
   const [dialog, setDialog] = useState<Dialog>(null)
   const [error, setError] = useState('')
   const [connecting, setConnecting] = useState(false)
+  const [audioVolume, setAudioVolume] = useState(1)
+  const [audioMuted, setAudioMuted] = useState(false)
 
   async function connect() {
     setError('')
@@ -89,8 +91,15 @@ export function RoomPage({
               onError={(err) => setError(err.message)}
               className="lk-room"
             >
-              <Stage roomName={join.room.name} canPublish={join.room.can_publish} />
-              <RoomAudioRenderer />
+              <Stage
+                roomName={join.room.name}
+                canPublish={join.room.can_publish}
+                audioVolume={audioVolume}
+                audioMuted={audioMuted}
+                onAudioVolumeChange={setAudioVolume}
+                onAudioMutedChange={setAudioMuted}
+              />
+              <RoomAudioRenderer volume={audioVolume} muted={audioMuted} />
             </LiveKitRoom>
           ) : (
             <div className="lobby">
