@@ -10,6 +10,7 @@ name: sharescreen
 services:
   caddy:
     image: caddy:2.10
+    profiles: [proxy]
     restart: unless-stopped
     ports:
       - "80:80"
@@ -41,7 +42,7 @@ services:
       - backend_data:/data
     # Published on localhost only: LiveKit (host network) posts webhooks here.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -68,7 +69,7 @@ services:
         webhook:
           api_key: ${LIVEKIT_API_KEY:-sharescreen}
           urls:
-            - http://127.0.0.1:8080/api/livekit/webhook
+            - http://127.0.0.1:${BACKEND_PORT:-8080}/api/livekit/webhook
         logging:
           level: info
 
