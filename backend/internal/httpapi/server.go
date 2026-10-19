@@ -85,8 +85,6 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("PATCH /api/admin/users/{id}", s.admin(s.handleUpdateUser))
 	mux.Handle("DELETE /api/admin/users/{id}", s.admin(s.handleDeleteUser))
 
-	mux.Handle("GET /api/users", s.authed(s.handleDirectory))
-
 	mux.Handle("GET /api/rooms", s.authed(s.handleListRooms))
 	mux.Handle("POST /api/rooms", s.authed(s.handleCreateRoom))
 	mux.Handle("POST /api/rooms/join-by-code", s.authed(s.handleJoinByCode))

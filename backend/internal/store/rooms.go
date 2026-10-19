@@ -11,9 +11,9 @@ import (
 type RoomType string
 
 const (
-	// RoomRestricted is permanent; members are added by the owner.
+	// RoomRestricted is permanent.
 	RoomRestricted RoomType = "restricted"
-	// RoomPrivate is temporary; anyone with the join code can enter.
+	// RoomPrivate is temporary: deleted once it has been empty for a while.
 	RoomPrivate RoomType = "private"
 )
 
@@ -31,7 +31,7 @@ type Room struct {
 	Name       string
 	Type       RoomType
 	OwnerID    string
-	JoinCode   string // normalized; empty unless Type is RoomPrivate
+	JoinCode   string // normalized (no dash)
 	EmptySince *time.Time
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
@@ -68,10 +68,10 @@ const roomColumns = `id, name, type, owner_id, join_code, empty_since, created_a
 func scanRoomFields(row scanner, extra ...any) (Room, error) {
 	var (
 		r                Room
-		joinCode, empty  sql.NullString
+		empty            sql.NullString
 		created, updated string
 	)
-	dest := append([]any{&r.ID, &r.Name, &r.Type, &r.OwnerID, &joinCode, &empty, &created, &updated}, extra...)
+	dest := append([]any{&r.ID, &r.Name, &r.Type, &r.OwnerID, &r.JoinCode, &empty, &created, &updated}, extra...)
 	err := row.Scan(dest...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Room{}, ErrNotFound
@@ -79,7 +79,6 @@ func scanRoomFields(row scanner, extra ...any) (Room, error) {
 	if err != nil {
 		return Room{}, err
 	}
-	r.JoinCode = joinCode.String
 	if r.EmptySince, err = parseNullTime(empty); err != nil {
 		return Room{}, fmt.Errorf("rooms.empty_since: %w", err)
 	}
@@ -92,15 +91,11 @@ func scanRoomFields(row scanner, extra ...any) (Room, error) {
 	return r, nil
 }
 
-func nullIfEmpty(s string) sql.NullString {
-	return sql.NullString{String: s, Valid: s != ""}
-}
-
 // CreateRoom inserts r. It returns ErrConflict if the join code is taken.
 func (q *Queries) CreateRoom(ctx context.Context, r Room) error {
 	_, err := q.db.ExecContext(ctx,
 		`INSERT INTO rooms (`+roomColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.ID, r.Name, r.Type, r.OwnerID, nullIfEmpty(r.JoinCode), formatNullTime(r.EmptySince),
+		r.ID, r.Name, r.Type, r.OwnerID, r.JoinCode, formatNullTime(r.EmptySince),
 		formatTime(r.CreatedAt), formatTime(r.UpdatedAt))
 	if isUniqueViolation(err) {
 		return ErrConflict
@@ -121,7 +116,7 @@ func (q *Queries) GetRoomByJoinCode(ctx context.Context, code string) (Room, err
 func (q *Queries) UpdateRoom(ctx context.Context, r Room) error {
 	res, err := q.db.ExecContext(ctx,
 		`UPDATE rooms SET name = ?, owner_id = ?, join_code = ?, updated_at = ? WHERE id = ?`,
-		r.Name, r.OwnerID, nullIfEmpty(r.JoinCode), formatTime(r.UpdatedAt), r.ID)
+		r.Name, r.OwnerID, r.JoinCode, formatTime(r.UpdatedAt), r.ID)
 	if isUniqueViolation(err) {
 		return ErrConflict
 	}

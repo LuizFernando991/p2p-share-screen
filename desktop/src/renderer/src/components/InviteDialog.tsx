@@ -6,7 +6,7 @@ import { api, errorMessage } from '../lib/api'
 import { Modal } from './Dialogs'
 import { useToast } from './ui'
 
-/** Invite code of a temporary room: copy it, or replace it (owner/admin). */
+/** Invite code of a room: copy it, or replace it (owner/admin). */
 export function InviteDialog({ room, onChanged, onClose }: { room: Room; onChanged: () => void; onClose: () => void }) {
   const toast = useToast()
   const [code, setCode] = useState(room.join_code ?? '')

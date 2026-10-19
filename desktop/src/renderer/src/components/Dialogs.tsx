@@ -50,7 +50,7 @@ export function CreateRoomDialog({ onClose, onCreated }: { onClose: () => void; 
             <strong className="choice-title">
               <Hash size={15} /> Fixa
             </strong>
-            <span className="muted small">Permanente. Você escolhe quem são os membros.</span>
+            <span className="muted small">Permanente. Entra quem tiver o código ou quem você adicionar.</span>
           </label>
           <label className={`choice ${type === 'private' ? 'selected' : ''}`}>
             <input type="radio" checked={type === 'private'} onChange={() => setType('private')} />

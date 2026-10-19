@@ -73,10 +73,12 @@ deploy/             # docker-compose.yml + livekit.dev.yaml (LiveKit local de de
 ### Salas
 Qualquer usuário logado pode criar uma sala e vira o **dono**. Há dois tipos:
 
-| Tipo | Duração | Como se entra | Dono pode sair? |
-|---|---|---|---|
-| `restricted` (**fixa**) | Permanente | Lista de membros, definida pelo dono | Sim, depois de **transferir a posse** para outro membro (`POST /api/rooms/{id}/owner`) |
-| `private` (**temporária**) | Apagada depois de ficar **vazia** (ninguém conectado no LiveKit) por `APP_TEMP_ROOM_GRACE` (padrão 5 min) | Quem tiver o **código** | Não: ele apaga a sala, ou ela acaba sozinha ao esvaziar |
+Nos dois tipos, entra quem tiver o **código de convite** da sala, ou quem o dono adicionar digitando o **username exato** (não existe busca nem lista de usuários).
+
+| Tipo | Duração | Dono pode sair? |
+|---|---|---|
+| `restricted` (**fixa**) | Permanente | Sim, depois de **transferir a posse** para outro membro (`POST /api/rooms/{id}/owner`) |
+| `private` (**temporária**) | Apagada depois de ficar **vazia** (ninguém conectado no LiveKit) por `APP_TEMP_ROOM_GRACE` (padrão 5 min) | Não: ele apaga a sala, ou ela acaba sozinha ao esvaziar |
 
 - Toda regra de permissão fica em `internal/rooms` (`authorize`, `CanManage`, `CanPublish`).
 - Membros (`room_members`): `role` = `owner` | `member`, mais a flag `can_publish` (se pode transmitir; padrão `true`). O dono também é uma linha em `room_members` e sempre pode transmitir.
@@ -87,7 +89,8 @@ Qualquer usuário logado pode criar uma sala e vira o **dono**. Há dois tipos:
 - Apagar um usuário apaga as salas de que ele é dono (cascade).
 - O admin enxerga e gerencia qualquer sala.
 - Código de convite: 8 caracteres de um alfabeto de 32 símbolos sem `0/1/I/O`, exibido como `K7QF-2MXP`, gerado com `crypto/rand`. A entrada aceita minúsculas, com ou sem hífen. Tentativas têm rate limit por usuário.
-- Para o dono achar quem adicionar, `GET /api/users?q=` busca usuários ativos (só id, username e nome).
+- Adicionar membro (`POST /members {username}`) exige o username exato (sem diferenciar maiúsculas). Conta desativada responde como inexistente (`user_not_found`), e não há endpoint de busca: ninguém consegue listar quem tem conta.
+- A migration `00003_room_codes` deu código às salas fixas que já existiam (reconstrói `rooms`; os membros são preservados).
 - O nome da sala no LiveKit é o `id` da sala no nosso banco.
 
 ### Fluxo para entrar e transmitir (LiveKit)
@@ -118,19 +121,17 @@ GET    /api/admin/users/{id}
 PATCH  /api/admin/users/{id}           {display_name?, role?, disabled?, password?}
 DELETE /api/admin/users/{id}
 
-GET    /api/users?q=                   busca de usuários ativos (qualquer logado)
-
 # salas
 GET    /api/rooms                      salas em que sou membro/dono (admin: todas)
 POST   /api/rooms                      {name, type: restricted|private}
 GET    /api/rooms/{id}
 PATCH  /api/rooms/{id}                 dono/admin: {name}
 DELETE /api/rooms/{id}                 dono/admin
-POST   /api/rooms/{id}/code/regenerate dono/admin (só private)
+POST   /api/rooms/{id}/code/regenerate dono/admin
 POST   /api/rooms/{id}/owner           dono/admin: {user_id} (só restricted; alvo precisa ser membro)
 POST   /api/rooms/join-by-code         {code}
 GET    /api/rooms/{id}/members
-POST   /api/rooms/{id}/members         dono/admin: {user_id, can_publish?}
+POST   /api/rooms/{id}/members         dono/admin: {username, can_publish?} (username exato)
 PATCH  /api/rooms/{id}/members/{uid}   dono/admin: {can_publish}
 DELETE /api/rooms/{id}/members/{uid}   dono/admin, ou o próprio membro saindo
 POST   /api/rooms/{id}/join-token      (fase 3) → {livekit_url, token}
@@ -263,7 +264,7 @@ E2E_A=admin:senha E2E_B=viewer:senha E2E_C=terceiro:senha E2E_OUT=/tmp/shots nod
 ## Decisões de produto
 
 - **Áudio:** o áudio do sistema é compartilhado junto com a tela.
-- **Código da sala `private`:** não expira; só muda quando o dono regenera.
-- **Convites em sala `restricted`:** só o dono adiciona e remove membros.
+- **Código de convite (todas as salas):** não expira e é reutilizável; só muda quando o dono regenera. Quem entra pelo código pode transmitir.
+- **Adicionar por nome:** só o dono (ou admin), digitando o username exato; não há lista de usuários.
 - **Controle remoto / anotação:** fora do escopo.
 - **Deploy:** VPS própria com IP público. O LiveKit precisa de portas UDP abertas (RTC 50000–60000, TURN/UDP 3478) e de TLS (TURN/TLS 5349 ou 443). O usuário tem um domínio e vai configurá-lo depois; até lá, deixar host/URLs sempre configuráveis por env, nunca fixos no código.

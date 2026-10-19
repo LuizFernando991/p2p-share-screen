@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -78,17 +77,6 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 
 func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 	return q.queryUsers(ctx, `SELECT `+userColumns+` FROM users ORDER BY username`)
-}
-
-// SearchActiveUsers matches query against username or display name
-// (case-insensitive substring), skipping disabled accounts.
-func (q *Queries) SearchActiveUsers(ctx context.Context, query string, limit int) ([]User, error) {
-	pattern := "%" + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query) + "%"
-	return q.queryUsers(ctx,
-		`SELECT `+userColumns+` FROM users
-		 WHERE disabled = 0 AND (username LIKE ? ESCAPE '\' OR display_name LIKE ? ESCAPE '\')
-		 ORDER BY username LIMIT ?`,
-		pattern, pattern, limit)
 }
 
 func (q *Queries) queryUsers(ctx context.Context, query string, args ...any) ([]User, error) {

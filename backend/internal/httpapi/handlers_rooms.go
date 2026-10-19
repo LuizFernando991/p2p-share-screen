@@ -107,7 +107,7 @@ type joinByCodeRequest struct {
 }
 
 type addMemberRequest struct {
-	UserID     string `json:"user_id"`
+	Username   string `json:"username"`
 	CanPublish *bool  `json:"can_publish"` // defaults to true
 }
 
@@ -238,7 +238,7 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request, actor s
 		return
 	}
 	canPublish := req.CanPublish == nil || *req.CanPublish
-	m, err := s.rooms.AddMember(r.Context(), actor, r.PathValue("id"), req.UserID, canPublish)
+	m, err := s.rooms.AddMember(r.Context(), actor, r.PathValue("id"), req.Username, canPublish)
 	if err != nil {
 		s.writeError(w, r, err)
 		return

@@ -63,8 +63,8 @@ try {
   await a.page.getByLabel('Nome').fill(room)
   await a.page.getByRole('button', { name: 'Criar', exact: true }).click()
   for (const who of [bUser, cUser]) {
-    await a.page.getByPlaceholder('Buscar pessoa…').fill(who)
-    await a.page.locator('.candidate').first().click()
+    await a.page.getByLabel('Username da pessoa').fill(who)
+    await a.page.getByLabel('Username da pessoa').press('Enter')
     await sleep(400)
   }
   for (const [x, motion, hz] of [[a, true, 440], [c, false, 660]]) {

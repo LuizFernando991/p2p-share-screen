@@ -1,7 +1,7 @@
-import { Crown, MonitorUp, MoreHorizontal, Search, UserMinus, UserPlus, X } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { AtSign, Crown, MonitorUp, MoreHorizontal, UserMinus, UserPlus, X } from 'lucide-react'
+import { type FormEvent, useCallback, useEffect, useState } from 'react'
 
-import type { DirectoryUser, Member, Room, User } from '../../../shared/api'
+import type { Member, Room, User } from '../../../shared/api'
 import { api, errorMessage } from '../lib/api'
 import { ConfirmDialog, Menu, useToast } from './ui'
 
@@ -20,8 +20,8 @@ export function MembersPanel({
 }) {
   const toast = useToast()
   const [members, setMembers] = useState<Member[]>([])
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<DirectoryUser[] | null>(null)
+  const [username, setUsername] = useState('')
+  const [adding, setAdding] = useState(false)
   const [pending, setPending] = useState<Pending>(null)
   const [error, setError] = useState('')
 
@@ -37,18 +37,6 @@ export function MembersPanel({
     void load()
   }, [load, room.member_count, room.owner.id])
 
-  const canAdd = room.can_manage && room.type === 'restricted'
-  useEffect(() => {
-    if (!canAdd || query.trim().length < 2) {
-      setResults(null)
-      return
-    }
-    const timer = setTimeout(() => {
-      void api.users.directory(query).then(setResults, () => setResults([]))
-    }, 250)
-    return () => clearTimeout(timer)
-  }, [query, canAdd])
-
   async function refreshAfter(action: () => Promise<unknown>, notice: string) {
     await action()
     await load()
@@ -56,13 +44,24 @@ export function MembersPanel({
     toast(notice)
   }
 
-  async function add(user: DirectoryUser) {
+  // Exact username only: there is no user search, so nobody can list who
+  // has an account.
+  async function add(e: FormEvent) {
+    e.preventDefault()
+    const name = username.trim()
+    if (!name) return
     setError('')
+    setAdding(true)
     try {
-      await refreshAfter(() => api.rooms.addMember(room.id, user.id, true), `${user.display_name} entrou na sala`)
-      setQuery('')
+      const added = await api.rooms.addMember(room.id, name, true)
+      setUsername('')
+      await load()
+      onChanged()
+      toast(`${added.display_name} entrou na sala`)
     } catch (err) {
       setError(errorMessage(err))
+    } finally {
+      setAdding(false)
     }
   }
 
@@ -78,9 +77,6 @@ export function MembersPanel({
     }
   }
 
-  const memberIds = new Set(members.map((m) => m.user_id))
-  const candidates = results?.filter((u) => !memberIds.has(u.id)) ?? []
-
   return (
     <aside className="members-panel">
       <header className="panel-header">
@@ -90,31 +86,26 @@ export function MembersPanel({
         </button>
       </header>
 
-      {canAdd && (
-        <div className="add-member">
-          <div className="input-icon">
-            <Search size={14} />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar pessoa…" />
-          </div>
-          {results && candidates.length === 0 && (
-            <p className="muted small hint">
-              {results.length === 0 ? 'Ninguém encontrado.' : 'Todos com esse nome já estão na sala.'}
-            </p>
-          )}
-          {candidates.map((u) => (
-            <button key={u.id} className="candidate" onClick={() => add(u)}>
-              <div className="avatar small">{u.display_name.slice(0, 1).toUpperCase()}</div>
-              <span className="candidate-names">
-                <span>{u.display_name}</span>
-                <span className="muted small">@{u.username}</span>
-              </span>
-              <UserPlus size={16} className="candidate-add" />
+      {room.can_manage && (
+        <form className="add-member" onSubmit={add}>
+          <div className="add-member-row">
+            <div className="input-icon">
+              <AtSign size={14} />
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="Username da pessoa"
+                aria-label="Username da pessoa"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+            <button className="icon" disabled={adding || !username.trim()} title="Adicionar" aria-label="Adicionar">
+              <UserPlus size={16} />
             </button>
-          ))}
-        </div>
-      )}
-      {room.can_manage && room.type === 'private' && (
-        <p className="muted small hint pad">Sala temporária: entra quem tiver o código de convite.</p>
+          </div>
+          <p className="muted small hint">Digite o username exato ou envie o código de convite da sala.</p>
+        </form>
       )}
 
       {error && <p className="error small pad">{error}</p>}

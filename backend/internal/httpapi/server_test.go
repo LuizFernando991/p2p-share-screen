@@ -247,15 +247,9 @@ func TestRoomsFlow(t *testing.T) {
 	alice := api.login("alice", "alice password").AccessToken
 	bob := api.login("bob", "bob password").AccessToken
 
-	// Any user can search the directory to find people to add.
-	var dir struct {
-		Users []struct {
-			ID       string `json:"id"`
-			Username string `json:"username"`
-		} `json:"users"`
-	}
-	if code := api.do("GET", "/api/users?q=smi", bob, nil, &dir); code != 200 || len(dir.Users) != 1 || dir.Users[0].Username != "alice" {
-		t.Fatalf("directory: %d %+v", code, dir)
+	// There is no user directory: members are added by exact username.
+	if code := api.do("GET", "/api/users?q=a", bob, nil, nil); code != 404 {
+		t.Fatalf("directory should not exist: %d", code)
 	}
 
 	var temp roomResp
@@ -282,7 +276,7 @@ func TestRoomsFlow(t *testing.T) {
 	var fixed roomResp
 	api.do("POST", "/api/rooms", alice, map[string]string{"name": "Team", "type": "restricted"}, &fixed)
 	if code := api.do("POST", "/api/rooms/"+fixed.ID+"/members", alice,
-		map[string]any{"user_id": bobUser.ID, "can_publish": false}, nil); code != 201 {
+		map[string]any{"username": "bob", "can_publish": false}, nil); code != 201 {
 		t.Fatalf("add member: %d", code)
 	}
 	var list struct {
@@ -331,7 +325,7 @@ func TestJoinToken(t *testing.T) {
 	api, userSvc := newTestAPI(t)
 	ctx := context.Background()
 	alice, _ := userSvc.Create(ctx, users.CreateInput{Username: "alice", DisplayName: "Alice", Password: "alice password"})
-	bob, _ := userSvc.Create(ctx, users.CreateInput{Username: "bob", Password: "bob password"})
+	userSvc.Create(ctx, users.CreateInput{Username: "bob", Password: "bob password"})
 	userSvc.Create(ctx, users.CreateInput{Username: "carol", Password: "carol password"})
 	aliceTok := api.login("alice", "alice password").AccessToken
 	bobTok := api.login("bob", "bob password").AccessToken
@@ -339,7 +333,7 @@ func TestJoinToken(t *testing.T) {
 
 	var room roomResp
 	api.do("POST", "/api/rooms", aliceTok, map[string]string{"name": "Team", "type": "restricted"}, &room)
-	api.do("POST", "/api/rooms/"+room.ID+"/members", aliceTok, map[string]any{"user_id": bob.ID, "can_publish": false}, nil)
+	api.do("POST", "/api/rooms/"+room.ID+"/members", aliceTok, map[string]any{"username": "bob", "can_publish": false}, nil)
 
 	type joinResp struct {
 		URL   string `json:"livekit_url"`

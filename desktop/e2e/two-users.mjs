@@ -55,8 +55,8 @@ try {
   await a.page.getByTitle('Criar sala').click()
   await a.page.getByLabel('Nome').fill(roomName)
   await a.page.getByRole('button', { name: 'Criar', exact: true }).click()
-  await a.page.getByPlaceholder('Adicionar pessoa…').fill(viewerUser)
-  await a.page.locator('.candidate', { hasText: `@${viewerUser}` }).click()
+  await a.page.getByLabel('Username da pessoa').fill(viewerUser)
+  await a.page.getByLabel('Username da pessoa').press('Enter')
   await a.page.locator('.member-list li', { hasText: 'Pode compartilhar' }).waitFor()
   await shot(a.page, '02-a-room-members')
 

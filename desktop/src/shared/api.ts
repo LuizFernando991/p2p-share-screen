@@ -42,12 +42,6 @@ export interface Member {
   joined_at: string
 }
 
-export interface DirectoryUser {
-  id: string
-  username: string
-  display_name: string
-}
-
 export interface JoinToken {
   livekit_url: string
   token: string

@@ -1,6 +1,5 @@
 import type {
   DesktopApi,
-  DirectoryUser,
   HttpMethod,
   JoinToken,
   Member,
@@ -43,15 +42,13 @@ export const api = {
     transfer: (id: string, userId: string) => call<Room>('POST', `/api/rooms/${id}/owner`, { user_id: userId }),
     joinToken: (id: string) => call<JoinToken>('POST', `/api/rooms/${id}/join-token`),
     members: (id: string) => call<{ members: Member[] }>('GET', `/api/rooms/${id}/members`).then((r) => r.members),
-    addMember: (id: string, userId: string, canPublish: boolean) =>
-      call<Member>('POST', `/api/rooms/${id}/members`, { user_id: userId, can_publish: canPublish }),
+    addMember: (id: string, username: string, canPublish: boolean) =>
+      call<Member>('POST', `/api/rooms/${id}/members`, { username, can_publish: canPublish }),
     setCanPublish: (id: string, userId: string, canPublish: boolean) =>
       call<Member>('PATCH', `/api/rooms/${id}/members/${userId}`, { can_publish: canPublish }),
     removeMember: (id: string, userId: string) => call<null>('DELETE', `/api/rooms/${id}/members/${userId}`)
   },
   users: {
-    directory: (q: string) =>
-      call<{ users: DirectoryUser[] }>('GET', `/api/users?q=${encodeURIComponent(q)}`).then((r) => r.users),
     list: () => call<{ users: User[] }>('GET', '/api/admin/users').then((r) => r.users),
     create: (input: { username: string; display_name: string; password: string; role: Role }) =>
       call<User>('POST', '/api/admin/users', input),
@@ -77,6 +74,7 @@ const messages: Record<string, string> = {
   not_room_owner: 'Só o dono da sala pode fazer isso.',
   invalid_room_name: 'O nome da sala precisa ter de 1 a 64 caracteres.',
   invalid_join_code: 'Nenhuma sala tem esse código.',
+  user_not_found: 'Nenhum usuário com esse nome. Confira o username exato.',
   already_member: 'Essa pessoa já é membro da sala.',
   member_not_found: 'Essa pessoa não é membro da sala.',
   user_disabled: 'Esse usuário está desativado.',

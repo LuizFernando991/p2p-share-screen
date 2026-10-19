@@ -1,12 +1,12 @@
 // Package rooms implements rooms, their members and invite codes. Every
 // room permission rule lives in this package.
 //
-// Rooms come in two kinds:
-//   - restricted: permanent; the owner keeps a member list. Ownership can be
-//     transferred, after which the old owner may leave.
-//   - private: temporary; anyone with the join code becomes a member. It is
-//     deleted after being empty for a grace period. Its owner cannot leave
-//     (deleting the room is the way out).
+// Every room has a join code: anyone who enters it becomes a member. The
+// owner can also add members by username. Rooms come in two kinds:
+//   - restricted: permanent. Ownership can be transferred, after which the
+//     old owner may leave.
+//   - private: temporary; deleted after being empty for a grace period. Its
+//     owner cannot leave (deleting the room is the way out).
 //
 // Callers that are not members get room_not_found, so room ids do not leak.
 // Admins can see and manage every room.
@@ -46,7 +46,6 @@ var (
 	errInvalidName       = apperr.Invalid("invalid_room_name", "room name must have 1 to 64 characters")
 	errInvalidType       = apperr.Invalid("invalid_room_type", "room type must be 'restricted' or 'private'")
 	errInvalidCode       = apperr.NotFound("invalid_join_code", "no room matches this code")
-	errNotPrivate        = apperr.Invalid("not_private_room", "only private rooms have a join code")
 	errNotRestricted     = apperr.Invalid("not_restricted_room", "ownership can only be transferred in restricted rooms")
 	errUserNotFound      = apperr.NotFound("user_not_found", "user not found")
 	errUserDisabled      = apperr.Invalid("user_disabled", "user is disabled")
@@ -252,16 +251,13 @@ func (s *Service) Delete(ctx context.Context, actor store.User, roomID string) e
 	return nil
 }
 
-// RegenerateCode replaces a private room's join code. Current members keep
+// RegenerateCode replaces the room's join code. Current members keep
 // their access; the old code stops working.
 func (s *Service) RegenerateCode(ctx context.Context, actor store.User, roomID string) (store.RoomListing, error) {
 	err := s.store.WithTx(ctx, func(q *store.Queries) error {
 		room, err := authorize(ctx, q, actor, roomID, true)
 		if err != nil {
 			return err
-		}
-		if room.Type != store.RoomPrivate {
-			return errNotPrivate
 		}
 		room.UpdatedAt = s.now()
 		for range maxCodeAttempts {
@@ -279,7 +275,7 @@ func (s *Service) RegenerateCode(ctx context.Context, actor store.User, roomID s
 	return s.store.GetRoomListing(ctx, roomID, actor.ID)
 }
 
-// JoinByCode makes actor a member of the private room with this code.
+// JoinByCode makes actor a member of the room with this code.
 // Joining a room one is already in is not an error.
 func (s *Service) JoinByCode(ctx context.Context, actor store.User, code string) (store.RoomListing, error) {
 	normalized := normalizeCode(code)
@@ -317,23 +313,23 @@ func (s *Service) ListMembers(ctx context.Context, actor store.User, roomID stri
 	return s.store.ListRoomMembers(ctx, roomID)
 }
 
-func (s *Service) AddMember(ctx context.Context, actor store.User, roomID, userID string, canPublish bool) (store.MemberListing, error) {
+// AddMember adds the user with this exact username (case-insensitive).
+// There is no user search, so only someone who knows the username can be
+// added; disabled accounts look the same as missing ones.
+func (s *Service) AddMember(ctx context.Context, actor store.User, roomID, username string, canPublish bool) (store.MemberListing, error) {
 	var out store.MemberListing
 	err := s.store.WithTx(ctx, func(q *store.Queries) error {
 		if _, err := authorize(ctx, q, actor, roomID, true); err != nil {
 			return err
 		}
-		u, err := q.GetUserByID(ctx, userID)
-		if errors.Is(err, store.ErrNotFound) {
+		u, err := q.GetUserByUsername(ctx, strings.TrimSpace(username))
+		if errors.Is(err, store.ErrNotFound) || (err == nil && u.Disabled) {
 			return errUserNotFound
 		}
 		if err != nil {
 			return err
 		}
-		if u.Disabled {
-			return errUserDisabled
-		}
-		m := store.RoomMember{RoomID: roomID, UserID: userID, Role: store.MemberMember, CanPublish: canPublish, JoinedAt: s.now()}
+		m := store.RoomMember{RoomID: roomID, UserID: u.ID, Role: store.MemberMember, CanPublish: canPublish, JoinedAt: s.now()}
 		if err := q.AddRoomMember(ctx, m); err != nil {
 			if errors.Is(err, store.ErrConflict) {
 				return errAlreadyMember
@@ -569,9 +565,6 @@ func authorize(ctx context.Context, q *store.Queries, actor store.User, roomID s
 }
 
 func createWithUniqueCode(ctx context.Context, q *store.Queries, room *store.Room) error {
-	if room.Type != store.RoomPrivate {
-		return q.CreateRoom(ctx, *room)
-	}
 	for range maxCodeAttempts {
 		room.JoinCode = newJoinCode()
 		err := q.CreateRoom(ctx, *room)

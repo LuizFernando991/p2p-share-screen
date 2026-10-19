@@ -898,14 +898,15 @@ label.toggle {
   padding: 0 12px;
 }
 
-.candidate {
-  background: transparent;
-  text-align: left;
-  padding: 6px 8px;
+.add-member-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.candidate:hover {
-  background: var(--bg-hover);
+.add-member-row .input-icon {
+  flex: 1;
+  min-width: 0;
 }
 
 .member-list {
@@ -1291,25 +1292,6 @@ button.success-button {
 
 .hint {
   margin: 4px 0;
-}
-
-.candidate {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  width: 100%;
-}
-
-.candidate-names {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  text-align: left;
-}
-
-.candidate-add {
-  color: var(--accent);
 }
 
 .member-name {

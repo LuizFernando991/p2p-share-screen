@@ -140,7 +140,7 @@ func TestCreate(t *testing.T) {
 	ctx := context.Background()
 
 	fixed := f.create(t, f.alice, store.RoomRestricted)
-	if fixed.MyRole != store.MemberOwner || fixed.MemberCount != 1 || fixed.JoinCode != "" || fixed.EmptySince != nil {
+	if fixed.MyRole != store.MemberOwner || fixed.MemberCount != 1 || len(fixed.JoinCode) != codeLen || fixed.EmptySince != nil {
 		t.Fatalf("unexpected restricted room: %+v", fixed)
 	}
 
@@ -183,7 +183,7 @@ func TestVisibility(t *testing.T) {
 		t.Fatalf("admin sees %d rooms, want 1", len(list))
 	}
 
-	_, err = f.svc.AddMember(ctx, f.alice, room.ID, f.bob.ID, true)
+	_, err = f.svc.AddMember(ctx, f.alice, room.ID, f.bob.Username, true)
 	mustOK(t, err)
 	list, _ = f.svc.List(ctx, f.bob)
 	if len(list) != 1 || list[0].MyRole != store.MemberMember {
@@ -195,10 +195,10 @@ func TestMembersCannotManage(t *testing.T) {
 	f := setup(t)
 	ctx := context.Background()
 	room := f.create(t, f.alice, store.RoomRestricted)
-	_, err := f.svc.AddMember(ctx, f.alice, room.ID, f.bob.ID, true)
+	_, err := f.svc.AddMember(ctx, f.alice, room.ID, f.bob.Username, true)
 	mustOK(t, err)
 
-	_, err = f.svc.AddMember(ctx, f.bob, room.ID, f.carol.ID, true)
+	_, err = f.svc.AddMember(ctx, f.bob, room.ID, f.carol.Username, true)
 	wantCode(t, err, "not_room_owner")
 	_, err = f.svc.Update(ctx, f.bob, room.ID, UpdateInput{Name: new("hacked")})
 	wantCode(t, err, "not_room_owner")
@@ -208,7 +208,7 @@ func TestMembersCannotManage(t *testing.T) {
 	wantCode(t, f.svc.RemoveMember(ctx, f.bob, room.ID, f.alice.ID), "not_room_owner")
 
 	// Admins can manage any room.
-	_, err = f.svc.AddMember(ctx, f.admin, room.ID, f.carol.ID, false)
+	_, err = f.svc.AddMember(ctx, f.admin, room.ID, f.carol.Username, false)
 	mustOK(t, err)
 }
 
@@ -217,14 +217,17 @@ func TestMemberManagement(t *testing.T) {
 	ctx := context.Background()
 	room := f.create(t, f.alice, store.RoomRestricted)
 
-	m, err := f.svc.AddMember(ctx, f.alice, room.ID, f.bob.ID, false)
+	m, err := f.svc.AddMember(ctx, f.alice, room.ID, f.bob.Username, false)
 	mustOK(t, err)
 	if m.Username != "bob" || m.CanPublish {
 		t.Fatalf("added member: %+v", m)
 	}
-	_, err = f.svc.AddMember(ctx, f.alice, room.ID, f.bob.ID, true)
+	// Usernames match exactly, ignoring case and surrounding spaces.
+	_, err = f.svc.AddMember(ctx, f.alice, room.ID, " BOB ", true)
 	wantCode(t, err, "already_member")
 	_, err = f.svc.AddMember(ctx, f.alice, room.ID, "missing", true)
+	wantCode(t, err, "user_not_found")
+	_, err = f.svc.AddMember(ctx, f.alice, room.ID, "car", true)
 	wantCode(t, err, "user_not_found")
 
 	l, _ := f.svc.Get(ctx, f.bob, room.ID)
@@ -252,8 +255,9 @@ func TestMemberManagement(t *testing.T) {
 	wantCode(t, f.svc.RemoveMember(ctx, f.alice, room.ID, f.bob.ID), "member_not_found")
 
 	f.users.Update(ctx, f.admin.ID, f.carol.ID, users.UpdateInput{Disabled: new(true)})
-	_, err = f.svc.AddMember(ctx, f.alice, room.ID, f.carol.ID, true)
-	wantCode(t, err, "user_disabled")
+	// Disabled accounts look missing, so usernames cannot be probed.
+	_, err = f.svc.AddMember(ctx, f.alice, room.ID, f.carol.Username, true)
+	wantCode(t, err, "user_not_found")
 }
 
 func TestOwnerLeavingAndTransfer(t *testing.T) {
@@ -265,7 +269,7 @@ func TestOwnerLeavingAndTransfer(t *testing.T) {
 
 	_, err := f.svc.TransferOwnership(ctx, f.alice, fixed.ID, f.bob.ID)
 	wantCode(t, err, "member_not_found")
-	_, err = f.svc.AddMember(ctx, f.alice, fixed.ID, f.bob.ID, false)
+	_, err = f.svc.AddMember(ctx, f.alice, fixed.ID, f.bob.Username, false)
 	mustOK(t, err)
 	_, err = f.svc.TransferOwnership(ctx, f.bob, fixed.ID, f.bob.ID)
 	wantCode(t, err, "not_room_owner")
@@ -324,9 +328,34 @@ func TestJoinByCode(t *testing.T) {
 		t.Fatalf("bob should keep access: %v", err)
 	}
 
+}
+
+func TestJoinRestrictedByCode(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
 	fixed := f.create(t, f.alice, store.RoomRestricted)
-	_, err = f.svc.RegenerateCode(ctx, f.alice, fixed.ID)
-	wantCode(t, err, "not_private_room")
+	if len(fixed.JoinCode) != codeLen {
+		t.Fatalf("restricted room code: %q", fixed.JoinCode)
+	}
+
+	l, err := f.svc.JoinByCode(ctx, f.bob, FormatCode(fixed.JoinCode))
+	mustOK(t, err)
+	if l.ID != fixed.ID || l.MyRole != store.MemberMember || !CanPublish(f.bob, l) {
+		t.Fatalf("join restricted: %+v", l)
+	}
+
+	_, err = f.svc.RegenerateCode(ctx, f.bob, fixed.ID)
+	wantCode(t, err, "not_room_owner")
+	fresh, err := f.svc.RegenerateCode(ctx, f.admin, fixed.ID)
+	mustOK(t, err)
+	if fresh.JoinCode == fixed.JoinCode {
+		t.Fatal("code did not change")
+	}
+	_, err = f.svc.JoinByCode(ctx, f.carol, fixed.JoinCode)
+	wantCode(t, err, "invalid_join_code")
+	if _, err := f.svc.Get(ctx, f.bob, fixed.ID); err != nil {
+		t.Fatalf("bob should keep access: %v", err)
+	}
 }
 
 func TestDeleteExpiredTemporary(t *testing.T) {
@@ -407,7 +436,7 @@ func TestJoin(t *testing.T) {
 	f := setup(t)
 	ctx := context.Background()
 	room := f.create(t, f.alice, store.RoomRestricted)
-	_, err := f.svc.AddMember(ctx, f.alice, room.ID, f.bob.ID, false)
+	_, err := f.svc.AddMember(ctx, f.alice, room.ID, f.bob.Username, false)
 	mustOK(t, err)
 
 	info, err := f.svc.Join(ctx, f.alice, room.ID)
@@ -460,9 +489,9 @@ func TestMediaSideEffects(t *testing.T) {
 	f := setup(t)
 	ctx := context.Background()
 	room := f.create(t, f.alice, store.RoomRestricted)
-	_, err := f.svc.AddMember(ctx, f.alice, room.ID, f.bob.ID, true)
+	_, err := f.svc.AddMember(ctx, f.alice, room.ID, f.bob.Username, true)
 	mustOK(t, err)
-	_, err = f.svc.AddMember(ctx, f.alice, room.ID, f.carol.ID, true)
+	_, err = f.svc.AddMember(ctx, f.alice, room.ID, f.carol.Username, true)
 	mustOK(t, err)
 	f.media.takeCalls()
 

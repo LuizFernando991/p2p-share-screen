@@ -153,7 +153,7 @@ export function RoomPage({
           message={
             <p>
               Sair de <strong>“{room.name}”</strong>?{' '}
-              {room.temporary ? 'Para voltar, você vai precisar do código de convite.' : 'Para voltar, o dono precisa te adicionar de novo.'}
+              Para voltar, você vai precisar do código de convite.
             </p>
           }
           confirmLabel="Sair da sala"
