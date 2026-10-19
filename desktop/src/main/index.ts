@@ -17,6 +17,11 @@ if (process.env.SHARESCREEN_PROFILE) {
   app.setPath('userData', join(app.getPath('appData'), `ShareScreen-${process.env.SHARESCREEN_PROFILE}`))
 }
 
+// Chromium's WebRTC may set the OS microphone volume on its own (it pushed it
+// to 100% on Linux when joining a room). We never send a microphone, so the
+// app must not touch the system input volume. Must run before app ready.
+app.commandLine.appendSwitch('disable-features', 'WebRtcAllowInputVolumeAdjustment')
+
 let mainWindow: BrowserWindow | null = null
 let quitting = false
 
