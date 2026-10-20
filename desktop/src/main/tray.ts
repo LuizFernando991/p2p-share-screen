@@ -19,6 +19,7 @@ export const resource = (name: string): string =>
 export class AppTray {
   private tray: Tray | null = null
   private state: MediaState = { room: null, sharing: false }
+  private update: { version: string; install: () => void } | null = null
 
   constructor(
     private readonly window: () => BrowserWindow | null,
@@ -34,6 +35,12 @@ export class AppTray {
 
   setState(state: MediaState): void {
     this.state = state
+    this.refresh()
+  }
+
+  /** A downloaded update: offers "restart to update" in the menu. */
+  setUpdateReady(version: string, install: () => void): void {
+    this.update = { version, install }
     this.refresh()
   }
 
@@ -54,6 +61,9 @@ export class AppTray {
           ] satisfies MenuItemConstructorOptions[])
         : []),
       { label: visible ? 'Ocultar janela' : 'Mostrar janela', click: () => this.toggleWindow() },
+      ...(this.update
+        ? ([{ label: `Reiniciar para atualizar (${this.update.version})`, click: this.update.install }] satisfies MenuItemConstructorOptions[])
+        : []),
       { label: 'Sair do ShareScreen', click: this.quit }
     ]
     this.tray.setContextMenu(Menu.buildFromTemplate(template))

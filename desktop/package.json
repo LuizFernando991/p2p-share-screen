@@ -16,8 +16,8 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "preview": "electron-vite preview",
-    "dist:linux": "electron-vite build && electron-builder --linux",
-    "dist:win": "electron-vite build && electron-builder --win"
+    "dist:linux": "electron-vite build && electron-builder --linux --publish never",
+    "dist:win": "electron-vite build && electron-builder --win --publish never"
   },
   "optionalDependencies": {
     "@vencord/venmic": "7.2.3",
@@ -39,5 +39,8 @@
     "react-dom": "19.3.0",
     "typescript": "6.0.3",
     "vite": "7.3.7"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.10"
   }
 }

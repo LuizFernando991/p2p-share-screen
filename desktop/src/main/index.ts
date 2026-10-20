@@ -7,6 +7,7 @@ import { Backend } from './backend'
 import { listSources, registerDisplayMediaHandler, selectSource, startSystemAudio, stopSystemAudio } from './screen'
 import { Settings } from './settings'
 import { AppTray, resource } from './tray'
+import { installUpdate, startAutoUpdate } from './updater'
 
 const DEFAULT_SERVER = process.env.SHARESCREEN_SERVER ?? 'http://localhost:8080'
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PATCH', 'DELETE']
@@ -147,6 +148,19 @@ if (!app.requestSingleInstanceLock()) {
 
     createWindow(settings)
     tray.create()
+    startAutoUpdate((version) => {
+      tray.setUpdateReady(version, () => {
+        quitting = true
+        installUpdate()
+      })
+      if (Notification.isSupported()) {
+        new Notification({
+          title: `Atualização ${version} pronta`,
+          body: 'Ela é instalada quando você sair do ShareScreen. Para instalar agora, use “Reiniciar para atualizar” no ícone da bandeja.',
+          icon: resource('icon.png')
+        }).show()
+      }
+    })
     app.on('activate', () => {
       if (mainWindow) tray.showWindow()
       else createWindow(settings)

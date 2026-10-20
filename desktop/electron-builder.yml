@@ -8,8 +8,13 @@ files:
   - out/**
   - resources/**
   - package.json
-# No update server yet: skip auto-update metadata.
-publish: null
+# Auto-update (electron-updater) reads the public GitHub releases. Builds
+# write latest.yml / latest-linux.yml next to the installers: upload them to
+# the release too, or installed apps will not see the new version.
+publish:
+  provider: github
+  owner: LuizFernando991
+  repo: share-screen
 
 asarUnpack:
   # Real file paths for tray/notification icons and the native venmic addon.
