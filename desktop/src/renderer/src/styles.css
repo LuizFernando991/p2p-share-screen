@@ -793,6 +793,22 @@ label.toggle {
   color: var(--text-strong);
 }
 
+/* Same pill shape as .chip, so it sits in the controls row. */
+.quality-select {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--bg-deep);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.quality-select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* Volume: pill with icon, filled track and value. --level (0..1) drives the fill,
    offset by half the thumb so the fill always ends under the thumb's center. */
 .volume {
@@ -1386,6 +1402,13 @@ button.success-button {
     z-index: 15;
     box-shadow: -8px 0 24px rgb(0 0 0 / 35%);
   }
+
+  /* The call controls stay above the floating panel, so sharing and leaving
+     are always reachable; the panel's list scrolls behind the bar. */
+  .controls {
+    position: relative;
+    z-index: 16;
+  }
 }
 
 /* Icon-only buttons; text stays in tooltips. */
@@ -1431,6 +1454,11 @@ button.success-button {
 
 .controls[data-c2] .segmented button {
   padding: 5px 7px;
+  font-size: 12px;
+}
+
+.controls[data-c2] .quality-select {
+  padding: 0 6px;
   font-size: 12px;
 }
 

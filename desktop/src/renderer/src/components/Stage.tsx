@@ -32,12 +32,24 @@ import {
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 
 import { SYSTEM_AUDIO_DEVICE_LABEL } from '../../../shared/api'
-import { publishTestPattern, screenCapture, screenPublish, SHARE_MODES, type ShareMode } from '../lib/share'
+import {
+  DEFAULT_QUALITY,
+  publishTestPattern,
+  qualityLabel,
+  screenCapture,
+  screenPublish,
+  SHARE_FPS,
+  SHARE_MODES,
+  SHARE_RESOLUTIONS,
+  type ShareMode,
+  type ShareQuality
+} from '../lib/share'
 import { limitationLabel, statsSampler, type InboundStats, type OutboundStats, type TrackStats } from '../lib/stats'
 import { SourcePicker } from './SourcePicker'
 
 const isLinux = window.api.platform === 'linux'
 const SHARE_MODE_KEY = 'shareMode'
+const SHARE_QUALITY_KEY = 'shareQuality'
 
 function trackKey(t: TrackReference): string {
   return `${t.participant.identity}:${t.publication.trackSid}`
@@ -49,6 +61,18 @@ function loadShareMode(): ShareMode {
   } catch {
     return 'smooth'
   }
+}
+
+function loadShareQuality(): ShareQuality {
+  try {
+    const [height, fps] = (localStorage.getItem(SHARE_QUALITY_KEY) ?? '').split('@').map(Number)
+    if (SHARE_RESOLUTIONS.some((r) => r.height === height) && SHARE_FPS.includes(fps as ShareQuality['fps'])) {
+      return { height, fps } as ShareQuality
+    }
+  } catch {
+    // Preference only; fall back to the default.
+  }
+  return DEFAULT_QUALITY
 }
 
 /** Waits for venmic's virtual microphone to show up as an input device. */
@@ -127,6 +151,10 @@ export function Stage({
   const [showStats, setShowStats] = useState(false)
   const [withAudio, setWithAudio] = useState(true)
   const [shareMode, setShareMode] = useState<ShareMode>(loadShareMode)
+  const [shareQuality, setShareQuality] = useState<ShareQuality>(loadShareQuality)
+  // Read by the dev test pattern without re-creating window.__share.
+  const shareQualityRef = useRef(shareQuality)
+  shareQualityRef.current = shareQuality
   const [picking, setPicking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -300,7 +328,11 @@ export function Stage({
     setError('')
     try {
       if (!isLinux) await window.api.screen.select(sourceId, withAudio)
-      await localParticipant.setScreenShareEnabled(true, screenCapture(shareMode), screenPublish(shareMode))
+      await localParticipant.setScreenShareEnabled(
+        true,
+        screenCapture(shareMode, shareQuality),
+        screenPublish(shareMode, shareQuality)
+      )
       if (withAudio) {
         try {
           await publishSystemAudio()
@@ -337,6 +369,15 @@ export function Stage({
     }
   }
 
+  function chooseShareQuality(quality: ShareQuality) {
+    setShareQuality(quality)
+    try {
+      localStorage.setItem(SHARE_QUALITY_KEY, `${quality.height}@${quality.fps}`)
+    } catch {
+      // Preference only; ignore storage errors.
+    }
+  }
+
   // Keep the tray icon/menu in sync; back to idle when leaving the call.
   useEffect(() => {
     window.api.tray.setState({ room: roomName, sharing: isScreenShareEnabled })
@@ -359,7 +400,7 @@ export function Stage({
     const hook = {
       async testPattern(motion: boolean, toneHz?: number) {
         stopPattern?.()
-        stopPattern = await publishTestPattern(localParticipant, motion, toneHz)
+        stopPattern = await publishTestPattern(localParticipant, motion, shareQualityRef.current, toneHz)
       },
       stopTestPattern() {
         stopPattern?.()
@@ -474,6 +515,25 @@ export function Stage({
                   </button>
                 ))}
               </div>
+              <select
+                className="quality-select"
+                aria-label="Resolução e fps da transmissão"
+                title="Resolução e fps da transmissão (a tela nunca é ampliada)"
+                value={qualityLabel(shareQuality)}
+                disabled={isScreenShareEnabled}
+                onChange={(e) => {
+                  const [height, fps] = e.target.value.split('p').map(Number)
+                  chooseShareQuality({ height, fps } as ShareQuality)
+                }}
+              >
+                {SHARE_RESOLUTIONS.flatMap((r) =>
+                  SHARE_FPS.map((fps) => (
+                    <option key={`${r.height}-${fps}`} value={qualityLabel({ height: r.height, fps })}>
+                      {r.label} · {fps} fps
+                    </option>
+                  ))
+                )}
+              </select>
               <label
                 className={`chip ${withAudio ? 'on' : ''} ${isScreenShareEnabled ? 'locked' : ''}`}
                 title={withAudio ? 'Áudio do sistema: ligado' : 'Áudio do sistema: desligado'}
